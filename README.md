@@ -2,13 +2,13 @@
 
 This program was written to support an upcoming proposal to introduce the idea of f-literals in C++ as a more or less textual transformation.
 
-Here is the proposal as of October 10: [](https://api.csswg.org/bikeshed/?url=https://raw.githubusercontent.com/hadrielk/cpp-proposals/main/f-string/f-string-r1.bs&force=1)
+Here is the proposal as of October 10: [Proposal by Hadriel Kaplan](https://api.csswg.org/bikeshed/?url=https://raw.githubusercontent.com/hadrielk/cpp-proposals/main/f-string/f-string-r1.bs&force=1)
 
 ## Examples
 
 ```C++
-// Basically a f-literal just lifts the contents of any {} pair inside it to a separate function parameter expression after 
-// the literal, and encloses all of it in a std::format call.
+// Basically a f-literal just lifts the contents of any {} pair inside it to a separate function parameter 
+// expression after the literal, and encloses all of it in a std::format call.
 f"Value: {std::sqrt(2.0)}"
 
 ->
@@ -16,17 +16,18 @@ f"Value: {std::sqrt(2.0)}"
 std::format("Value: {}", std::sqrt(2.0))
 
 
-// x-literals are used when std::format is not the intended target. x-literals don't enclose the resulting parameter list 
-// in any function call.
+// x-literals are used when std::format is not the intended target. x-literals don't enclose the 
+// resulting parameter list in any function call.
 std::print(xR"xy(The system works also with {"raw"} literals
-and "literals" in inserted expressions don't have to be escaped.)xy");
+with the R after the x or f.)xy");
 
 ->
 
 std::print(R"xy(The system works also with {} literals
-and "literals" in inserted expressions don't have to be escaped.)xy", "raw");
+with the R after the x or f.)xy", "raw");
 
-// Inserts can end with a : followed by a formatting argument. The formatting argument can contain insert expressions.
+// Inserts can end with a : followed by a formatting argument. The formatting argument can contain
+// insert expressions.
 f"Two decimals: {std::sqrt(2.0):.2}, N decimals: {std::sqrt(2.0):.{N}}"
 
 ->
@@ -47,7 +48,7 @@ expressions in raw literals don't need continuation lines as they are part of th
 
 While tools that scan source code would be required to do more work to find the end of a f/x literal than a regular literal most
 such tools would have to the full processing of the contents of f/x literals anyway as they contain executable code, subject to for
-instance static analysis.
+instance static analysis. so this is not a strong argument for requiring escaping of quotes inside insert expressions.
 
 ## Limitations
 
@@ -66,7 +67,7 @@ This implementation has some limitations as it is a pre-preprocessor which does 
 ## Building extract_fx
 
 Just compile the extract_fx.cpp file using a C++20 compiler. Older C++ versions may also work. Optionally use the supplied
-CMakeLists.txt file to build as a project.
+CMakeLists.txt file to build it.
 
 ## Usage
 
