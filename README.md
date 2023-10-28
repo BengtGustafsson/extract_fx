@@ -7,8 +7,8 @@ Here is the proposal as of October 10: [Proposal by Hadriel Kaplan](https://api
 ## Examples
 
 ```C++
-// Basically a f-literal just lifts the contents of any {} pair inside it to a separate function parameter 
-// expression after the literal, and encloses all of it in a std::format call.
+// Basically a f-literal just lifts the contents of any {} pair inside it to a separate function 
+// parameter expression after the literal, and encloses all of it in a std::format call.
 f"Value: {std::sqrt(2.0)}"
 
 ->
