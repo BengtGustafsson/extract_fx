@@ -40,7 +40,13 @@ public:
                     m_outLine.append(start, s);
                 }
                 else if (*s == '"') {      // String literal.
-                    std::string lit = processLiteral(m_outLine, s);
+                    std::string lit = processStringLiteral(m_outLine, s);
+                    if (lit.empty())
+                        return false;
+                    m_outLine += lit;
+                }
+                else if (*s == '\'') {     // Character literal.
+                    std::string lit = processCharLiteral(s);
                     if (lit.empty())
                         return false;
                     m_outLine += lit;
@@ -125,7 +131,13 @@ private:
         return start;
     }
 
-    std::string processLiteral(std::string& out, const char*& s) {
+    // Move char literal starting at s to out without touching any of its contents.
+    std::string processCharLiteral(const char*& s) {
+        return processLiteral(s, false, 0, '\'');
+    }
+
+    // Process a string literal including its prefix.
+    std::string processStringLiteral(std::string& out, const char*& s) {
         bool raw = false;
         char fx = 0;       // Can be 0, f or x
         const char* f = s;
@@ -146,11 +158,12 @@ private:
         return processLiteral(s, raw, fx);
     }
 
-    std::string processLiteral(const char*& s, bool raw, char fx) {
+    // Process a char or string literal according to raw mode, f/x mode and terminator.
+    std::string processLiteral(const char*& s, bool raw, char fx, char terminator = '"') {
         std::string ret;
 
         std::string prefix;
-        assert(*s == '"');
+        assert(*s == terminator);
         s++;
 
         // Output the std::format( for f literals only
@@ -172,10 +185,10 @@ private:
             ret += "R\"" + prefix + "(";
         }
         else
-            ret += '"';
+            ret += terminator;
 
         // Process the actual literal contents.
-        std::vector<std::string> inserts;       // Can't be string_views as R literals span lines and we only store the last line.
+        std::vector<std::string> fields;       // Can't be string_views as R literals span lines and we only store the last line.
         while (true) {
             if (raw) {      // Do raw line ends and try to find prefix
                 if (*s == 0) {
@@ -193,7 +206,7 @@ private:
                         if (*p++ != *c++)
                             break;
                     }
-                    if (p - s == prefix.size() + 1 && *p == '"') {
+                    if (p - s == prefix.size() + 1 && *p == terminator) {
                         // Raw literal ended
                         ret += ")" + prefix;
                         s = p;
@@ -212,7 +225,7 @@ private:
                             ret.append(start, s);  // Include the spaces in the output.
                             ret += '\n';           // And a newline
                             if (!getLine()) {
-                                std::cerr << "Input ends with a \\ last on a line inside a string literal.\n";
+                                std::cerr << "Input ends with a \\ last on a line inside a char or string literal.\n";
                                 return "";
                             }
                             s = m_inLine.c_str();
@@ -228,10 +241,10 @@ private:
                     }
                     continue;       // After the backslash + spaces + endline _or_ backslash + spaces + non-space we have to continue checking for backslash.
                 }
-                else if (*s == '"')
+                else if (*s == terminator)
                     break;          // Literal ended
                 else if (*s == '\0') {
-                    std::cerr << "Input line ends inside a string literal.\n";
+                    std::cerr << "Input line ends inside a char or string literal.\n";
                     return "";
                 }
             }
@@ -241,26 +254,26 @@ private:
                 if (*s != '{') {
                     // Find the end of the inserted expression. Basically scan for : or } but ignore as many colons as there are ? and
                     // skip through all parentheses, except in string literals.
-                    std::string insert = processInsert(s, raw);
-                    if (insert.empty())
-                        return insert;
+                    std::string field = processField(s, raw);
+                    if (field.empty())
+                        return field;
 
-                    inserts.push_back(std::move(insert));
-                    // If : check for nested inserts in the formatting arguments
+                    fields.push_back(std::move(field));
+                    // If : check for nested fields in the formatting arguments
                     if (*s == ':') {
                         ret += *s++;      // Transfer the : to the resulting string
                         while (*s != '}') {
-                            if (*s == '{') {    // Nested insert starts
+                            if (*s == '{') {    // Nested field starts
                                 ret += *s++;      // Transfer the { to the resulting string
-                                // Find the end of the inserted expression. Basically scan for : or } but ignore as many colons as there are ? and
+                                // Find the end of the expression-field. Basically scan for : or } but ignore as many colons as there are ? and
                                 // skip through all parentheses, except in string literals.
-                                std::string insert = processInsert(s, raw);
-                                if (insert.empty())
+                                std::string field = processField(s, raw);
+                                if (field.empty())
                                     return "";
 
-                                inserts.push_back(std::move(insert));
-                                if (*s != '}') {  // Colon not allowed inside nested insert expression.
-                                    std::cerr << "Found nested insert expression ending in :. This is not allowed.\n";
+                                fields.push_back(std::move(field));
+                                if (*s != '}') {  // Colon not allowed inside nested expression-field.
+                                    std::cerr << "Found nested expression-field ending in :. This is not allowed.\n";
                                     return "";
                                 }
                             }
@@ -285,8 +298,8 @@ private:
         }
 
         ret += *s++;      // Transfer the ending quote
-        for (auto& insert : inserts)
-            ret += ", " + insert;
+        for (auto& field : fields)
+            ret += ", " + field;
 
         if (fx == 'f')
             ret += ")";
@@ -294,9 +307,9 @@ private:
         return ret;
     }
 
-    // Note: As an insert may span multiple input lines using \ or if raw we have to collect the entire insert expression in ret.
-    std::string processInsert(const char*& s, bool raw) {
-        std::string ret;            // Insert string to return
+    // Note: As an expression-field may span multiple input lines using \ or if raw we have to collect the entire expression-field in ret.
+    std::string processField(const char*& s, bool raw) {
+        std::string ret;            // Field string to return
         std::vector<char> parens;   // Nested parens of different kinds
         int ternaries = 0;          // Number of ? operators that need : before we accept a format argument starting :
 
@@ -346,12 +359,12 @@ private:
             switch (*s) {
             case '\0':
                 if (!raw) {
-                    std::cerr << "End of line inside insert expression.\n";
+                    std::cerr << "End of line inside expression-field.\n";
                     return "";
                 }
 
                 if (!lineEnds()) {
-                    std::cerr << "Input ends inside an insert expression in a raw literal.\n";
+                    std::cerr << "Input ends inside an expression-field in a raw literal.\n";
                     return "";
                 }
 
@@ -379,6 +392,14 @@ private:
                 ret += *s++;
                 break;
 
+            case ',':
+                if (parens.empty()) {
+                    std::cerr << "Comma in expression-field.\n";
+                    return "";
+                }
+                ret += *s++;
+                break;
+
             case ':':
                 if (s[1] == ':')
                     ret += *s++; // Double colon is always a scoping operator
@@ -398,7 +419,7 @@ private:
                     ret += *s++;
                 else {
                     if (!checkContinuation()) {
-                        std::cerr << "Input ends with a \\ last on a line inside an insert expression.\n";
+                        std::cerr << "Input ends with a \\ last on a line inside an expression-field.\n";
                         return "";
                     }
                         
@@ -408,7 +429,15 @@ private:
                 break;
 
             case '"': {
-                std::string lit = processLiteral(ret, s);
+                std::string lit = processStringLiteral(ret, s);
+                if (lit.empty())
+                    return lit;
+                ret += lit;
+                break;
+            }
+
+            case '\'': {
+                std::string lit = processCharLiteral(s);
                 if (lit.empty())
                     return lit;
                 ret += lit;
@@ -423,7 +452,7 @@ private:
                         if (raw) {      // Just restart when lines end and continue checking for */
                             if (*s == '\0') {
                                 if (!lineEnds()) {
-                                    std::cerr << "Input ends inside a comment in an insert expression in a raw literal.\n";
+                                    std::cerr << "Input ends inside a comment in an expression-field in a raw literal.\n";
                                     return "";
                                 }
                             }
@@ -431,12 +460,12 @@ private:
                         else {
                             if (*s == '\\') {       // Possible continuation line inside comment
                                 if (!checkContinuation()) {
-                                    std::cerr << "Input ends after \\ inside a comment in an insert expression.\n";
+                                    std::cerr << "Input ends after \\ inside a comment in an expression-field.\n";
                                     return "";
                                 }
                             }
                             else if (*s == '\0') {
-                                std::cerr << "Input ends inside a comment in an insert expression.\n";
+                                std::cerr << "Input ends inside a comment in an expression-field.\n";
                                 return "";
                             }
                         }
@@ -538,23 +567,41 @@ bar)in", nullptr, false },                 // Unterminated raw literal spanning 
     { R"in(R"xy(foo 
 bar)yx")in", nullptr, false },             // Mismatched raw literal spanning two lines, xy prefix to yx suffix
 
-    // Test insert extraction
+    // Test char literals
+    { R"in('x')in" },
+    { R"in('\'')in" },
+    { R"in('\\')in" },
+    { R"in('"')in" },
+    { R"in('"and"')in" },     // Long char literals are acceptd, for some reason.
+    { R"in('\u1234')in" },    // Test escapes
+    { R"in('\x0A')in" },      // Test escapes
+    { R"in('\
+x')in", },                             // Test continuation line inside char literal
+    { R"in('x)in", nullptr, false },   // Test error that file ends inside char literal
+    { R"in('\)in", nullptr, false },   // Test error that file ends inside char literal after a continuation char.
+
+    // Test field extraction
     { R"in(f"The number is: {3 * 5}")in",                                  R"out(std::format("The number is: {}", 3 * 5))out" },
     { R"in(x"The numbers are: {a} and {b}")in",                            R"out("The numbers are: {} and {}", a, b)out" },
     { R"in(x"The numbers are: {a:x} and {b:5}")in",                        R"out("The numbers are: {:x} and {:5}", a, b)out" },
     { R"in(f"The number is: {a:{b}}")in",                                  R"out(std::format("The number is: {:{}}", a, b))out" },
     { R"in(f"The number is: {a:x{b}d}")in",                                R"out(std::format("The number is: {:x{}d}", a, b))out" },
 
+    // Test ternary operators on top level.
     { R"in(f"The number is: {a ? b : c :4d}")in",                          R"out(std::format("The number is: {:4d}", a ? b : c ))out" },
     { R"in(f"The number is: {a ? b ? c : d : c :4d}")in",                  R"out(std::format("The number is: {:4d}", a ? b ? c : d : c ))out" },
     { R"in(f"The number is: {a ? b : c ? d : e :4d}")in",                  R"out(std::format("The number is: {:4d}", a ? b : c ? d : e ))out" },
     { R"in(f"The number is: {MyType{}}")in",                               R"out(std::format("The number is: {}", MyType{}))out" },
 
+    // Test escaping with double braces.
     { R"in(f"Just braces {{a}} {a}")in",                                   R"out(std::format("Just braces {a} {}", a))out" },
     { R"in(f"Use colon colon {std::rand()}")in",                           R"out(std::format("Use colon colon {}", std::rand()))out" },
     { R"in(f"Use colon colon {std::rand():fmt}")in",                       R"out(std::format("Use colon colon {:fmt}", std::rand()))out" },
 
-    // Test C comments in insert expressions
+    // Test expressions ending in } followed by } of the expression-field.
+    { R"in(f"Construction {MyClass{1, 2}}")in",                            R"out(std::format("Construction {}", MyClass{1, 2}))out" },
+    
+    // Test C comments in expression-field
     { R"in(f"The number is: {3 /* comment */ * 5}")in",                    R"out(std::format("The number is: {}", 3 /* comment */ * 5))out" },
     { R"in(f"The number is: {3 /* : ignored */ * 5:fmt}")in",              R"out(std::format("The number is: {:fmt}", 3 /* : ignored */ * 5))out" },
     { R"in(f"The number is: {3 /* } ignored */ * 5:f{m}t}")in",            R"out(std::format("The number is: {:f{}t}", 3 /* } ignored */ * 5, m))out" },
@@ -571,30 +618,33 @@ continues */ * 5))out" },
 xy) )" yx)" continues */ * 5})xy")in",                                     R"out(std::format(R"xy(The number is: {})xy", 3 /* comment
 xy) )" yx)" continues */ * 5))out" },
 
+    // Test that commas are not allowed in expression-fields
+    { R"in(f"The number is: {3 , 5}")in",  nullptr, false },               // Commas are not allowed on top level as this will form part of a function argument list.
+
     // Negative tests
-    { R"in(f"Just braces {{} {a}")in", nullptr, false },                   // } have to be doubled when not ending an insert
-    { R"in(f"The number is: {a:x{b:x}d}")in", nullptr, false },            // Colon in nested insert
+    { R"in(f"Just braces {{} {a}")in", nullptr, false },                   // } have to be doubled when not ending an expression-field
+    { R"in(f"The number is: {a:x{b:x}d}")in", nullptr, false },            // Colon in nested expression-field
     { R"in(f"The number is: {3
-* 5}")in", nullptr, false },                                               // End of line inside insert expression
-    { R"in(f"The number is: {3 * 5")in", nullptr, false },                 // Literal ends inside insert expression
-    { R"in(fR"xy(The number is: {3 * 5)xy")in", nullptr, false },          // Literal ends inside insert expression in raw literal
+* 5}")in", nullptr, false },                                               // End of line inside expression-field expression
+    { R"in(f"The number is: {3 * 5")in", nullptr, false },                 // Literal ends inside expression-field expression
+    { R"in(fR"xy(The number is: {3 * 5)xy")in", nullptr, false },          // Literal ends inside expression-field expression in raw literal
     { R"in(f"The number is: {3 * 5: a")in", nullptr, false },              // Literal ends inside formatter args
     { R"in(fR"xy(The number is: {3 * 5: a)xy")in", nullptr, false },       // Literal ends inside formatter args in raw literal
-    { R"in(f"The number is: {3 * 5:{3")in", nullptr, false },              // Literal ends inside nested insert
-    { R"in(fR"xy(The number is: {3 * 5:{3)xy")in", nullptr, false },       // Literal ends inside nested insert in raw literal
-    { R"in(f"The number is: {3 * 5 /*comment ")in", nullptr, false },      // Literal ends inside comment in an insert
-    { R"in(fR"x(The number is: {3 * 5 /*comment )x")in", nullptr, false }, // Literal ends inside comment in an insert in a raw literal
-    { R"in(f"The number is: {3 * 5 /*comment\)in", nullptr, false },       // Input ends inside comment in an insert
+    { R"in(f"The number is: {3 * 5:{3")in", nullptr, false },              // Literal ends inside nested expression-field
+    { R"in(fR"xy(The number is: {3 * 5:{3)xy")in", nullptr, false },       // Literal ends inside nested expression-field in raw literal
+    { R"in(f"The number is: {3 * 5 /*comment ")in", nullptr, false },      // Literal ends inside comment in an expression-field
+    { R"in(fR"x(The number is: {3 * 5 /*comment )x")in", nullptr, false }, // Literal ends inside comment in an expression-field in a raw literal
+    { R"in(f"The number is: {3 * 5 /*comment\)in", nullptr, false },       // Input ends inside comment in an expression-field
 
-    // Test literals in insert expressions.
-    { R"in(f"The number is: {std::strlen("He{ } j")}")in",                 R"out(std::format("The number is: {}", std::strlen("He{ } j")))out" },
-    { R"in(f"The number is: {std::strlen(R"(Hej)")}")in",                  R"out(std::format("The number is: {}", std::strlen(R"(Hej)")))out" },
-    { R"in(f"The number is: {std::strlen(R"xy(Hej
-{{}})xy")}")in",                                                           R"out(std::format("The number is: {}", std::strlen(R"xy(Hej
-{{}})xy")))out" },
+    // Test literals in expression-field expressions.
+    { R"in(f"The number is: {std::strchr("He{ } j", '"')}")in",            R"out(std::format("The number is: {}", std::strchr("He{ } j", '"')))out" },
+    { R"in(f"The number is: {std::strchr(R"(Hej)", '\'')}")in",            R"out(std::format("The number is: {}", std::strchr(R"(Hej)", '\'')))out" },
+    { R"in(f"The number is: {std::strchr(R"xy(Hej
+{{}})xy", '\x0a')}")in",                                                   R"out(std::format("The number is: {}", std::strchr(R"xy(Hej
+{{}})xy", '\x0a')))out" },
     
-    // f literal in f literal insert
-    { R"in(f"The number is: {f"Five: {5}"} end")in",                           R"out(std::format("The number is: {} end", std::format("Five: {}", 5)))out" },
+    // f literal in f literal expression-field
+    { R"in(f"The number is: {f"Five: {5}"} end")in",                       R"out(std::format("The number is: {} end", std::format("Five: {}", 5)))out" },
     { R"in(f"The number is: {f"Fi\
 ve: {5}"}")in",                                                            R"out(std::format("The number is: {}", std::format("Fi\
 ve: {}", 5)))out" },
