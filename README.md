@@ -2,7 +2,7 @@
 
 This program was written to support an upcoming proposal to introduce the idea of f-literals in C++ as a more or less textual transformation performed by the preprocessor..
 
-Here is the proposal as of October 10: [Proposal by Hadriel Kaplan](http://api.csswg.org/bikeshed/?url=https://raw.githubusercontent.com/hadrielk/cpp-proposals/main/f-string/f-string-r2.bs&force=1)
+Here is the proposal as of October 10: [Proposal by Hadriel Kaplan](http://api.csswg.org/bikeshed/?url=https://raw.githubusercontent.com/hadrielk/cpp-proposals/main/f-string/f-string-r2.bs&force=1)
 
 ## Examples
 
@@ -59,10 +59,11 @@ This implementation has some limitations as it is a pre-preprocessor which does 
 
 2. f/x literals inside preprocessor macros are not processed (as lines starting with a # are just dumped to the output file).
 
-3. When a f/x literal is written directly before another literal (f/x or not) the expression-fields are _not_ moved to the end of the sequence of literals. This
-  could be fixed.
+3. When a f/x literal is written adjacent to another literal (f/x or not) the expression-fields are _not_ moved to the end of the sequence of literals. This
+    could be fixed.
 
-4. Any errors immediately stop the processing with an error message. No resynchronization/restart is attempted.
+4. Any errors immediately stop the processing with an error message. No resynchronization/restart is attempted. Most errors are
+    related to premature ending of the input anyway.
 
 
 ## Building extract_fx
@@ -70,12 +71,41 @@ This implementation has some limitations as it is a pre-preprocessor which does 
 Just compile the extract_fx.cpp file using a C++20 compiler. Older C++ versions may also work. Optionally use the supplied
 CMakeLists.txt file to build it.
 
+The CMakeLists file contains a macro target_extract_file which can be called with a cmake target name and a file name without
+extension. This file .cpi is supposed to be the source code before pre-preprocessing and a corresponding .cpp file is added to the
+target and a pre-preprocessing step is added to the generated build files.
+
+## Experimentation environment.
+
+A file format_literal.h is supplied which contains a function of the same name that calls std::format and returns its return value
+as a subclass of std::string called extracted_string. Overloads of print and println are provided which take just this std::string subclass. With this the supplied demo program format_literal_test.cpi can be compiled. It contains the following uses of f-literals. Note however that std::println does not work as I didn't put the new println overload in namespace std.
+
+```C++
+#include "format_literal.h"
+#include <iostream>
+
+int main()
+{
+    println(f"Number: {1}");
+    std::cout << f"Number: {2}";
+}
+```
+
+format_literal.h included above demonstrates one idea of how we could get rid of x-literals: Anytime the f-literal is used where a std::string or
+std::string_view is required the subclass acts as a stand-in for the base class whereas in the cases where a std::format_string is
+the first parameter an overload taking an extracted_string can be introduced without interfering with the normal operation of
+functions such as std::print and std::println. std::format should not have such an overload though, as calling std::format on a
+f-literal is surely a mistake.
+
 ## Usage
 
 Without command line arguments extract_fx works like a Unix filter reading from stdin and writing to stdout. Note that with long f/x
 literals and/or expression-fields output will be withheld until enough input lines have been seen.
 
-With one parameter extract_fx reads from this file any writes the result to stdout unless the parameter is --test which causes the built in
-unit tests to run.
+An option --name is available for experimentation. It controls the name of the function that f-literals are wrapped in. It defaults to `std::format`.
 
-With two filename parameters extract_fx reads from the first file and writes to the second. Using the same filename for input and output is not allowed.
+An option --test causes the built in unit tests to run. This can't be combined with any other parameters.
+
+With one filename parameter extract_fx reads from this file any writes the result to stdout.
+
+With two filename parameters extract_fx reads from the first file and writes to the second. Using the same filename for input and output is not supported.

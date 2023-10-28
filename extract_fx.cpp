@@ -11,7 +11,7 @@
 
 class FxExtractor {
 public:
-    FxExtractor(std::ostream& outFile, std::istream& inFile) : m_outFile(outFile), m_inFile(inFile) {}
+    FxExtractor(std::ostream& outFile, std::istream& inFile, const std::string& fname) : m_outFile(outFile), m_inFile(inFile), fname(fname) {}
 
     bool process() {
         while (getLine()) {
@@ -168,7 +168,7 @@ private:
 
         // Output the std::format( for f literals only
         if (fx == 'f')
-            ret = "std::format(";
+            ret = fname + "(";
 
         // Handle start of literal
         if (raw) {      // Collect prefix
@@ -244,7 +244,7 @@ private:
                 else if (*s == terminator)
                     break;          // Literal ended
                 else if (*s == '\0') {
-                    std::cerr << "Input line ends inside a char or string literal.\n";
+                    std::cerr << "Input line ends inside a char or string literal. Line: " << m_lineNo << "\n";
                     return "";
                 }
             }
@@ -273,7 +273,7 @@ private:
 
                                 fields.push_back(std::move(field));
                                 if (*s != '}') {  // Colon not allowed inside nested expression-field.
-                                    std::cerr << "Found nested expression-field ending in :. This is not allowed.\n";
+                                    std::cerr << "Found nested expression-field ending in :. This is not allowed. Line: " << m_lineNo << "\n";
                                     return "";
                                 }
                             }
@@ -289,7 +289,7 @@ private:
             else if (fx != 0 && *s == '}') {
                 ret += *s++;      // Transfer the first } to the resulting string
                 if (*s++ != '}') {
-                    std::cerr << "All right braces have to be doubled in f/x string literals.\n";
+                    std::cerr << "All right braces have to be doubled in f/x string literals. Line: " << m_lineNo << "\n";
                     return "";
                 }
             }
@@ -359,7 +359,7 @@ private:
             switch (*s) {
             case '\0':
                 if (!raw) {
-                    std::cerr << "End of line inside expression-field.\n";
+                    std::cerr << "End of line inside expression-field on line: " << m_lineNo << "\n";
                     return "";
                 }
 
@@ -394,7 +394,7 @@ private:
 
             case ',':
                 if (parens.empty()) {
-                    std::cerr << "Comma in expression-field.\n";
+                    std::cerr << "Comma in expression-field on line: " << m_lineNo << "\n";
                     return "";
                 }
                 ret += *s++;
@@ -489,6 +489,8 @@ private:
 
     std::ostream& m_outFile;
     std::istream& m_inFile;
+    std::string fname;
+
     std::string m_inLine, m_outLine; 
     int m_lineNo = 0;
 };
@@ -660,7 +662,7 @@ bool runOneTest(const char* input, const char* truth, bool expectOk, int ix)
 {
     std::istringstream in(input);
     std::ostringstream out;
-    FxExtractor extractor(out, in);
+    FxExtractor extractor(out, in, "std::format");
 
     if (expectOk) {
         if (!extractor.process()) {
@@ -700,7 +702,7 @@ int test()
 // Process stdin -> stdout, file -> stdout or file -> file.
 int main(int argc, char** argv)
 {
-    if (argc == 2 && strcmp(argv[1], "-h") == 0 || argc > 3) {
+    if (argc == 2 && strcmp(argv[1], "-h") == 0 || argc > 5) {
         std::cerr << "Usage: extractfx [<inFile> [<outFile>]].\nIf no parameters are given reads from stdin, if no outFile is given writes to stdout.\nIf --test is the only parameter does a self test.\n";
         return 0;
     }
@@ -712,16 +714,36 @@ int main(int argc, char** argv)
     std::istream* is = &std::cin;
     std::ostream* os = &std::cout;
 
-    if (argc > 1) {
-        static std::ifstream inFile(argv[1]);
-        if (!inFile) {
-            std::cerr << "Could not open input file " << argv[1];
-            return 1;
-        }
-        is = &inFile;
+    std::string name = "std::format";
 
-        if (argc > 2) {
-            static std::ofstream outFile(argv[2]);
+    if (argc > 1) {
+        int argn = 1;
+        if (std::strncmp(argv[1], "--name", 6) == 0) {
+            argn++;
+            if (argv[1][6] == '=' || argv[1][6] == ':') {
+                name = argv[1] + 7;
+            }
+            else if (argc < 3) {
+                std::cout << "--name must be followed by a function name to surround f literals with. Default is std::format()\n.";
+                return 1;
+            }
+            else {
+                name = argv[2];
+                argn++;
+            }
+        }
+
+        if (argc > argn) {
+            static std::ifstream inFile(argv[argn++]);
+            if (!inFile) {
+                std::cerr << "Could not open input file " << argv[1];
+                return 1;
+            }
+            is = &inFile;
+        }
+
+        if (argc > argn) {
+            static std::ofstream outFile(argv[argn]);
             if (!outFile) {
                 std::cerr << "Could not open output file " << argv[2];
                 return 1;
@@ -730,7 +752,7 @@ int main(int argc, char** argv)
         }
     }
 
-    FxExtractor extractor(*os, *is);
+    FxExtractor extractor(*os, *is, name);
     return extractor.process() ? 0 : 1;
 }
 
