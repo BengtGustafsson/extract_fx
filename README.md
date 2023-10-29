@@ -43,9 +43,18 @@ So far the proposal is not concrete enough to be able to tell if this implementa
 of concept for a variant of the proposal where expressions-fields can be written verbatim as if they were outside the literal, i.e.
 with non-escaped string literals and C style comments.
 
+A quick debug output feature from Python is also implemented in extract_fx: If an expression ends with a = character (apart from whitespace) the expression is output as a label too, so to easily print values of some variables just do:
+
+```c++
+std::print(f"{a=}, {b = }");
+
+// Output:
+a=17, b = 42
+```
+
 expression-fields in regular f/x literals must use continuation lines ending in backslash if they span multiple lines.
 Expression-fields in raw literals don't need continuation lines as they are part of the raw literal. *NOTE: It is not entirely
-obvious (and* *not needed for parseability) to require backslashes to end lines in expression-fields in regular f/x literals.*
+obvious (and* *not needed for parsability) to require backslashes to end lines in expression-fields in non-raw f/x literals.*
 
 While tools that scan source code would be required to do more work to find the end of a f/x literal than a regular literal most
 such tools would have to the full processing of the contents of f/x literals anyway as they contain executable code, subject to for
