@@ -250,7 +250,7 @@ private:
             }
             
             if (fx != 0 && *s == '{') {
-                ret += *s++;      // Transfer the { to the resulting string
+                s++;      // Transfer the { to the resulting string
                 if (*s != '{') {
                     // Find the end of the inserted expression. Basically scan for : or } but ignore as many colons as there are ? and
                     // skip through all parentheses, except in string literals.
@@ -258,18 +258,32 @@ private:
                     if (field.empty())
                         return field;
 
+
+                    size_t pos = field.size();
+                    while (pos > 0 && std::isspace(static_cast<unsigned char>(field[pos - 1])))
+                        pos--;
+
+                    if (field[pos - 1] == '=') {
+                        ret += field;
+                        field.erase(pos - 1);   // Remove = and trailing spaces from field.
+                    }
+                    ret += '{';
+
                     fields.push_back(std::move(field));
                     // If : check for nested fields in the formatting arguments
                     if (*s == ':') {
                         ret += *s++;      // Transfer the : to the resulting string
                         while (*s != '}') {
                             if (*s == '{') {    // Nested field starts
-                                ret += *s++;      // Transfer the { to the resulting string
+                                s++;    // Pass {
+
                                 // Find the end of the expression-field. Basically scan for : or } but ignore as many colons as there are ? and
                                 // skip through all parentheses, except in string literals.
                                 std::string field = processField(s, raw);
                                 if (field.empty())
                                     return "";
+
+                                    ret += '{';      // Transfer the { to the resulting string
 
                                 fields.push_back(std::move(field));
                                 if (*s != '}') {  // Colon not allowed inside nested expression-field.
@@ -283,8 +297,10 @@ private:
                     }
                     ret += *s++;   // Push the } to the output. Must be done separately as other right braces need to be doubled.
                 }
-                else
+                else {
+                    ret += '{';
                     s++;        // Pass the second { in a double brace quote situation.
+                }
             }
             else if (fx != 0 && *s == '}') {
                 ret += *s++;      // Transfer the first } to the resulting string
@@ -389,14 +405,6 @@ private:
                 if (parens.empty())
                     ternaries++;
 
-                ret += *s++;
-                break;
-
-            case ',':
-                if (parens.empty()) {
-                    std::cerr << "Comma in expression-field on line: " << m_lineNo << "\n";
-                    return "";
-                }
                 ret += *s++;
                 break;
 
@@ -620,9 +628,6 @@ continues */ * 5))out" },
 xy) )" yx)" continues */ * 5})xy")in",                                     R"out(std::format(R"xy(The number is: {})xy", 3 /* comment
 xy) )" yx)" continues */ * 5))out" },
 
-    // Test that commas are not allowed in expression-fields
-    { R"in(f"The number is: {3 , 5}")in",  nullptr, false },               // Commas are not allowed on top level as this will form part of a function argument list.
-
     // Negative tests
     { R"in(f"Just braces {{} {a}")in", nullptr, false },                   // } have to be doubled when not ending an expression-field
     { R"in(f"The number is: {a:x{b:x}d}")in", nullptr, false },            // Colon in nested expression-field
@@ -646,7 +651,7 @@ xy) )" yx)" continues */ * 5))out" },
 {{}})xy", '\x0a')))out" },
     
     // f literal in f literal expression-field
-    { R"in(f"The number is: {f"Five: {5}"} end")in",                       R"out(std::format("The number is: {} end", std::format("Five: {}", 5)))out" },
+{ R"in(f"The number is: {f"Five: {5}"} end")in",                           R"out(std::format("The number is: {} end", std::format("Five: {}", 5)))out" },
     { R"in(f"The number is: {f"Fi\
 ve: {5}"}")in",                                                            R"out(std::format("The number is: {}", std::format("Fi\
 ve: {}", 5)))out" },
@@ -655,6 +660,11 @@ ve: {}", 5)))out" },
 ve: {5})xy"}")in",                                                         R"out(std::format("The number is: {}", std::format(R"xy(Fi
 ve: {})xy", 5)))out" },
 
+    // Test trailing = for debug expressions:
+    { R"in(f"{foo=}")in",                                                  R"out(std::format("foo={}", foo))out" },
+    { R"in(f"{foo =}")in",                                                 R"out(std::format("foo ={}", foo ))out" },
+    { R"in(f"{foo= }")in",                                                 R"out(std::format("foo= {}", foo))out" },
+    { R"in(f"{foo = }")in",                                                R"out(std::format("foo = {}", foo ))out" },
 };
 
 

@@ -9,7 +9,9 @@
 int main()
 {
     println(format_literal("Number: {}", 1));
-    std::cout << format_literal("Number: {}", 2);
-    std::runtime_format("");
+    std::cout << format_literal("Number: {}", 2) << std::endl;
+
+    int value = 17;
+    println(format_literal("value={}", value));
 }
 

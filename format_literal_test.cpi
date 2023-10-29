@@ -9,6 +9,9 @@
 int main()
 {
     println(f"Number: {1}");
-    std::cout << f"Number: {2}";
+    std::cout << f"Number: {2}" << std::endl;
+
+    int value = 17;
+    println(f"{value=}");
 }
 
