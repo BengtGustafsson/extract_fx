@@ -17,6 +17,3 @@ public:
 // std::string today... there should not be many.
 void print(const extracted_string& str) { std::cout << str; }
 void println(const extracted_string& str) { std::cout << str << "\n"; }     // Or maybe endl?
-
-
-
