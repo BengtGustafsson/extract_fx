@@ -29,99 +29,106 @@ public:
         }
 
         catch (const std::runtime_error& ex) {
-            std::cerr << ex.what();
+            std::cerr << ex.what() << "\n";
         }
 
         return false;
     }
 
     void tryProcess() {
-        while (getLine()) {
+        std::string outLine;
+
+        while (getLine(nullptr)) {
             // Scan for string literals, skipping preprocessor directives and comments. For now don't skip #ifdef'ed out lines
             const char* s = m_inLine.c_str();       // We use \0 to see the end. This way we can always access s[1] to see two character tokens such as // and /*
             while (*s != '\0') {
-                if (*s == '#') {            // Just copy input line if it is an include directive
-                    m_outLine = m_inLine;
-                    handleContinuations();
+                switch (*s) {
+                case '"':
+                    outLine += processStringLiteral(outLine, s);
                     break;
-                }
-                else if (*s == '/' && s[1] == '/') {     // Add the rest of the line and output it if a // comment starts
-                    m_outLine.append(s, m_inLine.c_str() + m_inLine.size());
-                    handleContinuations();
+
+                case '\'':
+                    outLine += processCharLiteral(s);
                     break;
+
+                case '/':               // Check for comments.
+                    if (s[1] == '*') {
+                        outLine += processCComment(s);  //  C comments don't need \ last on lines even if this expression is inside a non-raw literal.
+                        break;
+                    }
+                    else if (s[1] == '/') {
+                        outLine += processCPPComment(s);  //  C++ comments support \ last on lines regardless of if the enclosing literal is raw or not.
+                        break;
+                    }
+                    [[fallthrough]];  
+
+                default:
+                    outLine += *s++;
+                    break;      // Nothing to do for other characters.
                 }
-                else if (*s == '/' && s[1] == '*') {     // C comment starts. Copy character by character until it ends, possibly getting more lines as we go.
-                    const char* start = handleLongComment(s);
-                    m_outLine.append(start, s);
-                }
-                else if (*s == '"') {      // String literal.
-                    m_outLine += processStringLiteral(m_outLine, s);
-                }
-                else if (*s == '\'') {     // Character literal.
-                    m_outLine += processCharLiteral(s);
-                }
-                else
-                    m_outLine += *s++;
             }
 
-            putLine();
+            m_outFile << outLine;
+            if (!m_inFile.eof())            // Preserve lack of last \n char in input.
+                m_outFile << "\n";
+
+            outLine.clear();
         }
     }
 
 private:
-    bool getLine() {
-        if (!m_inFile || m_inFile.eof())
-            return false;
+    bool getLine(const char* err) {
+        if (!m_inFile || m_inFile.eof()) {
+            if (err != nullptr)
+                throw EarlyEnd(err);
+            else
+                return false;
+        }
 
         getline(m_inFile, m_inLine);
         m_lineNo++;
         return true;
     }
 
-    void putLine() {
-        m_outFile << m_outLine;
-        if (!m_inFile.eof())
-            m_outFile << "\n";
+    bool checkContinuation(const char* p)
+    {
+        while (p > m_inLine.c_str() && std::isspace(static_cast<unsigned char>(*--p)))
+            ;
 
-        m_outLine.clear();
+        return *p != '\\';
     }
 
-    bool nextLine() {
-        putLine();
-        return getLine();
-    }
-
-    // Used for preprocessor directives and // comments that may continue with continuations.
-    // The first line is supposed to be in m_outLine already.
-    // Finish by loading the first line that is NOT a continuation. Also handle that there is no continuation.
-    void handleContinuations() {
-        while (true) {
-            const char* p = m_outLine.c_str() + m_outLine.size();     // Point at the \0 initially
-            while (p > m_outLine.c_str() && std::isspace(static_cast<unsigned char>(*--p)))
-                ;
-
-            if (*p != '\\')
+    std::string processCPPComment(const char*& s) {
+        assert(*s == '/' && s[1] == '/');
+        auto end = m_inLine.c_str() + m_inLine.size();
+        std::string ret(s, end);                                 // The comment starts with the rest of the current line.
+        while (true) {                                           // But can have continuation lines...
+            if (checkContinuation(end))
                 break;
 
-            if (!nextLine())
-                throw EarlyEnd("Input ends with a line ending in \\.\n");
+            // Line ended with \ so the next line is also part of the comment. Rinse and repeat.
+            getLine("Input ends with a line ending in \\.");
 
-            m_outLine = m_inLine;
+            ret += "\n" + m_inLine;
+            end = m_inLine.c_str() + m_inLine.size();
         }
+
+        s = end;
+        return ret;
     }
 
-    // Pass by a C comment, outputting any complete lines encountered. Return start which points in the last line (or same line if
-    // comment doesn't span multiple lines.
-    const char* handleLongComment(const char*& s) {
+    std::string processCComment(const char*& s) {
         assert(*s == '/' && s[1] == '*');
+        std::string ret;
+        
         const char* start = s;
         s += 2;
         while (*s == 0 || *s != '*' || s[1] != '/') {
             if (*s == '\0') {
                 // Line ended in comment. output line and reload buffer.
-                m_outLine.append(start, s);
-                if (!nextLine())
-                    throw EarlyEnd("/* unmatched to the end of the input.\n");
+                ret.append(start, s);
+                ret += "\n";
+                getLine("/* unmatched to the end of the input.");
 
                 s = m_inLine.c_str();
                 start = s;
@@ -131,7 +138,8 @@ private:
         }
 
         s += 2;
-        return start;
+        ret.append(start, s);       // Append last part of C comment including trailing */
+        return ret;
     }
 
     // Move char literal starting at s to out without touching any of its contents.
@@ -178,7 +186,7 @@ private:
             auto begin = s;
             while (*s != '(') {
                 if (*s == 0)
-                    throw ParsingError(m_lineNo, " ends in a raw literal prefix. There must be a ( before the end of line after R\".\n");
+                    throw ParsingError(m_lineNo, " ends in a raw literal prefix. There must be a ( before the end of line after R\".");
 
                 s++;
             }
@@ -194,8 +202,7 @@ private:
         while (true) {
             if (raw) {      // Pass raw line ends and try to find prefix
                 if (*s == 0) {
-                    if (!getLine())
-                        throw EarlyEnd("Input ends in raw literal.\n");
+                    getLine("Input ends in raw literal.");
 
                     ret += '\n';
                     s = m_inLine.c_str();
@@ -225,8 +232,7 @@ private:
                         if (*s == '\0') {     // Continuation line detected, go get next line.
                             ret.append(start, s);  // Include the spaces in the output.
                             ret += '\n';           // And a newline
-                            if (!getLine())
-                                throw EarlyEnd("Input ends with a \\ last on a line inside a char or string literal.\n");
+                            getLine("Input ends with a \\ last on a line inside a char or string literal.");
 
                             s = m_inLine.c_str();
                             break;   // Continue parsing literal on the next line
@@ -245,7 +251,7 @@ private:
                 else if (*s == terminator)
                     break;          // Literal ended
                 else if (*s == '\0') 
-                    throw ParsingError(m_lineNo, "Input line ends inside a char or string literal.\n");
+                    throw ParsingError(m_lineNo, "Input line ends inside a char or string literal.");
             }
             
             if (fx != 0 && *s == '{') {
@@ -270,6 +276,16 @@ private:
                     if (*s == ':') {
                         ret += *s++;      // Transfer the : to the resulting string
                         while (*s != '}') {
+                            if (*s == 0) {
+                                // If not raw the line must end by a \ as we're now in the part of the literal that's preserved to the output literal.
+                                if (!raw) {
+                                    if (!checkContinuation(s))
+                                        throw ParsingError(m_lineNo, "Found unescaped end of line inside format-spec in non-raw literal");
+                                }
+                                getLine("Input ends inside format-spec");
+
+                                s = m_inLine.c_str();
+                            }
                             if (*s == '{') {    // Nested field starts
                                 s++;    // Pass {
 
@@ -281,7 +297,7 @@ private:
 
                                 fields.push_back(std::move(field));
                                 if (*s != '}')   // Colon not allowed inside nested expression-field.
-                                    throw ParsingError(m_lineNo, "Found nested expression-field ending in :. This is not allowed.\n");
+                                    throw ParsingError(m_lineNo, "Found nested expression-field ending in :. This is not allowed.");
                             }
 
                             ret += *s++;      // Transfer the } or other formatting argument char to the resulting string
@@ -297,7 +313,7 @@ private:
             else if (fx != 0 && *s == '}') {
                 ret += *s++;      // Transfer the first } to the resulting string
                 if (*s++ != '}')
-                    throw ParsingError(m_lineNo, "All right braces have to be doubled in f/x string literals.\n");
+                    throw ParsingError(m_lineNo, "All right braces have to be doubled in f/x string literals.");
             }
             else
                 ret += *s++;
@@ -321,40 +337,31 @@ private:
         std::vector<char> parens;   // Nested parens of different kinds
         int ternaries = 0;          // Number of ? operators that need : before we accept a format argument starting :
 
-        auto lineEnds = [&]()->bool {
+        auto lineEnds = [&](const char* err) {
             assert(*s == '\0');
 
             ret += '\n';
-            if (!getLine())
-                return false;
+            getLine(err);
 
             s = m_inLine.c_str();
-            return true;
         };
 
         // Check if a \ is a line continuation and if so add the rest of the line to ret and position s at the start of next line.
-        // If not append \ and at least one more character (more if the backslash was followed by whitespace and then _not_ an end
-        // of  line).
-        auto checkContinuation = [&]()->bool {
+        // If not append \ and return false
+        auto isContinuation = [&]() {
             assert(*s == '\\');
             ret += *s++;        // Output the backslash
-            const char* start = s;
+            const char* p = s;
             while (true) {
-                if (*s == '\0') {     // Continuation line detected, go get next line.
-                    if (!lineEnds())
-                        return false;
-
-                    break;   // Continue parsing 
+                if (*p == '\0') {     // Continuation line detected, go get next line.
+                    lineEnds("Input ends with a \\ last on a line inside an expression-field.");
+                    return true;   // Continue parsing 
                 }
-                else if (std::isspace(static_cast<unsigned char>(*s)))
-                    s++;
-                else {
-                    s = start;
-                    break;      // There was some no-space character, the \ was something else to be handled later.
-                }
+                else if (std::isspace(static_cast<unsigned char>(*p)))
+                    p++;
+                else
+                    return false;      // There was some non-space character, the \ was something else to be handled later.
             }
-
-            return true;
         };
 
         while (parens.size() > 0 || ternaries > 0 || *s != '}') {
@@ -366,12 +373,7 @@ private:
 
             switch (*s) {
             case '\0':
-                if (!raw)
-                    throw ParsingError(m_lineNo, "End of line inside expression-field.\n");
-
-                if (!lineEnds())
-                    throw EarlyEnd("Input ends inside an expression-field in a raw literal.\n");
-
+                lineEnds("Input ends inside an expression-field in a raw literal.");
                 break;
 
             case '(':
@@ -414,10 +416,7 @@ private:
                 if (raw)        // No continuation lines in raw literals.
                     ret += *s++;
                 else {
-                    if (!checkContinuation())
-                        throw EarlyEnd("Input ends with a \\ last on a line inside an expression-field.\n");
-                        
-                    if (s > m_inLine.c_str())       // If we used exception this test would be unnecessary, the return value could indicate if it was a continuation.
+                    if (!isContinuation())        // It was not a continuation line, s has not been reset.
                         ret += *s++;                // Pass the escaped character unless it was a proper line ending.
                 }
                 break;
@@ -432,33 +431,19 @@ private:
                 break;
             }
 
-            case '/':               // Check for C comment. // comments not allowed
+            case '/':               // Check for comments.
                 if (s[1] == '*') {
-                    ret += *s++;
-                    ret += *s++;
-                    while (*s != '*' || s[1] != '/') {
-                        if (raw) {      // Just restart when lines end and continue checking for */
-                            if (*s == '\0') {
-                                if (!lineEnds())
-                                    throw EarlyEnd("Input ends inside a comment in an expression-field in a raw literal.\n");
-                            }
-                        }
-                        else {
-                            if (*s == '\\') {       // Possible continuation line inside comment
-                                if (!checkContinuation())
-                                    throw EarlyEnd("Input ends after \\ inside a comment in an expression-field.\n");
-                            }
-                            else if (*s == '\0')
-                                throw EarlyEnd("Input ends inside a comment in an expression-field.\n");
-                        }
-
-                        ret += *s++;
-                    }
-
-                    ret += *s++;
-                    ret += *s++;
+                    ret += processCComment(s);  //  C comments don't need \ last on lines even if this expression is inside a non-raw literal.
+                    break;
                 }
-                break;      // No * after / or the entire comment is passed.
+                else if (s[1] == '/') {
+                    ret += processCPPComment(s) + "\n";;  //  C++ comments support \ last on lines regardless of if the enclosing literal is raw or not.
+                    getLine("Input ends with a // comment inside a expression-field");
+
+                    s = m_inLine.c_str();
+                    break;
+                }
+                [[fallthrough]];  
 
             default:
                 ret += *s++;
@@ -473,7 +458,7 @@ private:
     std::istream& m_inFile;
     std::string fname;
 
-    std::string m_inLine, m_outLine; 
+    std::string m_inLine; 
     int m_lineNo = 0;
 };
 
@@ -490,13 +475,11 @@ struct {
 )in" },
     { R"in(#x = y
 )in" },
-    { R"in(#x = y"
-)in" },                                    // preprocessor directive with mismatched " is ok.
-{ R"in(#x = y\ 
-" c"\n)in" },                              // preprocessor directive with mismatched " on continuation line is ok.
-{ R"in(#x = y\ 
+    { R"in(#x = y\ 
+" c"\n)in" },
+    { R"in(#x = y\ 
 foo \
-" c"\n)in" },                              // preprocessor directive with mismatched " on second continuation line is ok.
+" c"\n)in" },
     { R"in(xx // foo)in" },                // C++ comment
     { R"in(xx // foo \ 
 c ")in" },                                 // C++ comment with continuation line containing mismatched " is ok.
@@ -504,9 +487,8 @@ c ")in" },                                 // C++ comment with continuation line
     { R"in(xx /* ss
  " */ yy)in" },                            // #10 C comment containing mismatched " on line 2 is ok
     { R"in(xx /* ss)in", nullptr, false }, // C comment which doesn't end is not ok.
-{ R"in(xx /* ss
+    { R"in(xx /* ss
  "/ yy *)in", nullptr, false },            // Multiline C comment which doesn't end is not ok.
-    { R"in(#x = y \)in", nullptr, false }, // Ends when the directive continuation line is expected (Note: getline() finishes with an empty line if the last char is \n, so there is no trailing \n in the test cases)
     { R"in(xx //  \)in", nullptr, false }, // Ends after a continuation line in a // comment
     { R"in()in" },
     
@@ -522,7 +504,7 @@ c ")in" },                                 // C++ comment with continuation line
 ")in", nullptr, false },
     { R"in("foo\ 
 bar)in", nullptr, false },
-{ R"in("foo\)in", nullptr, false },
+    { R"in("foo\)in", nullptr, false },
 
     // Test raw literals.
     { R"in(R"()")in" },
@@ -534,7 +516,7 @@ bar)in", nullptr, false },
     { R"in(R"xy(foo)"bar)yx"fum)xy")in" }, // Mismatched raw prefixed ends followed by real ending.
     { R"in(R"xy(foo
 "bar)xy")in" },                            // Continuation line for non-raw literal
-{ R"in(R"xy(foo
+    { R"in(R"xy(foo
 )xy")in" },                                // Continuation line for non-raw literal that stops in column 1 of the second line
     { R"in(R"abc)in", nullptr, false },    // Line ending in R literal prefix, if it is the last line
     { R"in(R"abc
@@ -582,6 +564,11 @@ x')in", },                             // Test continuation line inside char lit
     { R"in(f"Use colon colon {std::rand()}")in",                           R"out(std::format("Use colon colon {}", std::rand()))out" },
     { R"in(f"Use colon colon {std::rand():fmt}")in",                       R"out(std::format("Use colon colon {:fmt}", std::rand()))out" },
 
+    // Test expression-fields with line breaks
+    { R"in(f"The number is: {3
+* 5}")in",                                                                 R"out(std::format("The number is: {}", 3
+* 5))out" },
+
     // Test expressions ending in } followed by } of the expression-field.
     { R"in(f"Construction {MyClass{1, 2}}")in",                            R"out(std::format("Construction {}", MyClass{1, 2}))out" },
     
@@ -602,11 +589,17 @@ continues */ * 5))out" },
 xy) )" yx)" continues */ * 5})xy")in",                                     R"out(std::format(R"xy(The number is: {})xy", 3 /* comment
 xy) )" yx)" continues */ * 5))out" },
 
+    // Test C++ comments in expression-fields in raw and non-raw x-literals.
+    { R"in(f"The number is: {3 // comment
+ * 5}")in",                                                                R"out(std::format("The number is: {}", 3 // comment
+ * 5))out" },
+    { R"in(fR"xy(The number is: {3 // comment
+ * 5})xy")in",                                                             R"out(std::format(R"xy(The number is: {})xy", 3 // comment
+ * 5))out" },
+
     // Negative tests
     { R"in(f"Just braces {{} {a}")in", nullptr, false },                   // } have to be doubled when not ending an expression-field
     { R"in(f"The number is: {a:x{b:x}d}")in", nullptr, false },            // Colon in nested expression-field
-    { R"in(f"The number is: {3
-* 5}")in", nullptr, false },                                               // End of line inside expression-field expression
     { R"in(f"The number is: {3 * 5")in", nullptr, false },                 // Literal ends inside expression-field expression
     { R"in(fR"xy(The number is: {3 * 5)xy")in", nullptr, false },          // Literal ends inside expression-field expression in raw literal
     { R"in(f"The number is: {3 * 5: a")in", nullptr, false },              // Literal ends inside formatter args
@@ -625,7 +618,7 @@ xy) )" yx)" continues */ * 5))out" },
 {{}})xy", '\x0a')))out" },
     
     // f literal in f literal expression-field
-{ R"in(f"The number is: {f"Five: {5}"} end")in",                           R"out(std::format("The number is: {} end", std::format("Five: {}", 5)))out" },
+    { R"in(f"The number is: {f"Five: {5}"} end")in",                       R"out(std::format("The number is: {} end", std::format("Five: {}", 5)))out" },
     { R"in(f"The number is: {f"Fi\
 ve: {5}"}")in",                                                            R"out(std::format("The number is: {}", std::format("Fi\
 ve: {}", 5)))out" },
@@ -654,13 +647,13 @@ bool runOneTest(const char* input, const char* truth, bool expectOk, int ix)
             return false;
         }
         if (out.str() != truth) {
-            std::cerr << std::format("ERROR in test {}: Extraction produced erroneous output:\n{}\nWhen expected output is:\n{}\n", ix, input, truth);
+            std::cerr << std::format("ERROR in test {}: Extraction produced erroneous output:\n{}\nWhen expected output is:\n{}\n", ix, out.str(), truth);
             return false;
         }
     }
     else {
         if (extractor.process()) {
-            std::cerr << std::format("ERROR in test {}: The input below should have produced an error string.\n{}\nExtraction however produced output:\n{}\n", ix, input, truth);
+            std::cerr << std::format("ERROR in test {}: The input below should have produced an error string.\n{}\nExtraction however produced output:\n{}\n", ix, input, out.str());
             return false;
         }
     }
