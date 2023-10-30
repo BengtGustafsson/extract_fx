@@ -8,10 +8,10 @@
 
 int main()
 {
-    println(format_literal("Number: {}", 1));
-    std::cout << format_literal("Number: {}", 2) << std::endl;
+    println(extracted_string("Number: {}", 1));
+    std::cout << extracted_string("Number: {}", 2) << std::endl;
 
     int value = 17;
-    println(format_literal("value={}", value));
+    println(extracted_string("value={}", value));
 }
 

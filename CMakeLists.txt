@@ -15,7 +15,7 @@ macro(target_extract_file TARGET FILE)
     # Custom command to generate .cpp file from .cpi file
     add_custom_command(OUTPUT "${OUT}"
                        DEPENDS "${IN}" extract_fx
-                       COMMAND "${EXEC}" --name format_literal "${IN}" "${OUT}"
+                       COMMAND "${EXEC}" --name extracted_string "${IN}" "${OUT}"
     )
 
     target_sources("${TARGET}" PRIVATE "${OUT}")
