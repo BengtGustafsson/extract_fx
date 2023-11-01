@@ -44,7 +44,7 @@ public:
         nextLine();
 
         while (peek() != '\0') {        // Process all lines
-            // Scan for string literals, skipping preprocessor directives and comments. For now don't skip #ifdef'ed out lines
+            // Scan for string literals, skipping comments. For now don't skip #ifdef'ed out lines
             while (peek() != '\n' && peek() != '\0') {
                 switch (peek()) {
                 case '"':
@@ -90,10 +90,11 @@ private:
         return true;
     }
 
-    char peek(size_t offset = 0) { return m_ptr[offset]; }
+    char peek() { return *m_ptr; }
+    char peek(size_t offset) { return m_ptr[offset]; }
 
     char next() {
-        if (*m_ptr == '\n' ||*m_ptr == '\0') {
+        if (*m_ptr == '\n' || *m_ptr == '\0') {
             nextLine();
             return '\n';
         }
@@ -101,10 +102,7 @@ private:
         return *m_ptr++;
     }
 
-    void bump(size_t n) {
-        m_ptr += n;
-    }
-
+    void bump(size_t n) { m_ptr += n; }
     bool isspace() { return std::isspace(static_cast<unsigned char>(peek())); }
 
     std::string processCPPComment() {
@@ -112,13 +110,13 @@ private:
         std::string ret = "//";
         bump(2);
 
-        bool backslash = false;
-        while (peek() != '\n' || backslash) {                                           // But can have continuation lines...
+        bool backslash = false;     // Set when the last non-whitespace character is a backslash.
+        while (peek() != '\n' || backslash) {            // Comment can have continuation lines...
             if (peek() == '\0') {
                 if (backslash)
                     throw EarlyEnd("Input ends with a // comment line ending in \\.");
                 else
-                    return ret;     // Comment line last in file. Ok.
+                    return ret;     // Comment line last in file. This is ok.
             }
             else if (peek() == '\\')
                 backslash = true;
@@ -149,9 +147,7 @@ private:
     }
 
     // Move char literal starting at s to out without touching any of its contents.
-    std::string processCharLiteral() {
-        return processLiteral(false, 0, '\'');
-    }
+    std::string processCharLiteral() { return processLiteral(false, 0, '\''); }
 
     // Process a string literal including its prefix.
     void processStringLiteral(std::string& str) {
@@ -216,7 +212,7 @@ private:
                     ret += next();      // )
                     size_t pix = 0;
                     while (pix < prefix.size()) {
-                        if (peek(pix) != prefix[pix])
+                        if (peek(pix) != prefix[pix])   // Note: as prefix can't contain \n or \0 we can always pre-see characters until comparison fails or prefix is complete.
                             break;
                         
                         pix++;
@@ -246,66 +242,59 @@ private:
                     backslash = false;
             }
             
-            if (fx != 0 && peek() == '{') {
-                next();
-                if (peek() != '{') {
-                    // Find the end of the inserted expression. Basically scan for : or } but ignore as many colons as there are ? and
-                    // skip through all parentheses, except in string literals.
-                    std::string field = processField(raw);
+            if (fx != 0) {
+                if (peek() == '{') {
+                    next();
+                    if (peek() != '{') {
+                        std::string field = processField();
 
-                    // Check for expression-field ending in = +optional spaces.
-                    size_t pos = field.size();
-                    while (pos > 0 && std::isspace(static_cast<unsigned char>(field[pos - 1])))
-                        pos--;
+                        // Check for expression-field ending in = +optional spaces.
+                        size_t pos = field.size();
+                        while (pos > 0 && std::isspace(static_cast<unsigned char>(field[pos - 1])))
+                            pos--;
 
-                    if (field[pos - 1] == '=') {  // Debug style field where expression ends in =
-                        ret += field;
-                        field.erase(pos - 1);   // Remove = and trailing spaces from field.
-                    }
+                        if (field[pos - 1] == '=') {  // Debug style field where expression ends in =
+                            ret += field;
+                            field.erase(pos - 1);   // Remove = and trailing spaces from field.
+                        }
 
-                    ret += '{';     // After automatically generated label, if any.
+                        ret += '{';     // After automatically generated label, if any.
 
-                    fields.push_back(std::move(field));
-                    // If : check for nested fields in the format-spec
-                    if (peek() == ':') {
-                        ret += next();      // Transfer the : to the resulting string
-                        while (peek() != '}') {
-                            if (peek() == '\0')
-                                EarlyEnd("Input ends inside format-spec");
+                        fields.push_back(std::move(field));
+                        // If : check for nested fields in the format-spec
+                        if (peek() == ':') {
+                            ret += next();      // Transfer the : to the resulting string
+                            while (peek() != '}') {
+                                if (peek() == '\0')
+                                    EarlyEnd("Input ends inside format-spec");
 
-                            if (peek() == '{') {    // Nested field starts
-                                ret += next();
+                                if (peek() == '{') {    // Nested field starts
+                                    ret += next();
 
-                                // Find the end of the expression-field. Basically scan for : or } but ignore as many colons as there are ? and
-                                // skip through all parentheses, except in string literals.
-                                std::string field = processField(raw);
+                                    // Find the end of the expression-field. Basically scan for : or } but ignore as many colons as there are ? and
+                                    // skip through all parentheses, except in string literals.
+                                    std::string field = processField();
 
-                                fields.push_back(std::move(field));
-                                if (peek() != '}')   // Colon not allowed inside nested expression-field.
-                                    throw ParsingError(m_lineNo, "Found nested expression-field ending in :. This is not allowed.");
-                                backslash = false;
+                                    fields.push_back(std::move(field));
+                                    if (peek() != '}')   // Colon not allowed inside nested expression-field.
+                                        throw ParsingError(m_lineNo, "Found nested expression-field ending in :. This is not allowed.");
+                                }
+
+                                ret += next();      // Transfer other formatting argument char to the resulting string
                             }
-
-                            ret += next();      // Transfer other formatting argument char to the resulting string
                         }
                     }
-
-                    ret += next();      // Transfer the trailing }
+                    else
+                        ret += '{';   // The first { transferred for double left braces. The second is transferred as the "normal" literal character.
                 }
-                else {
-                    ret += '{';
-                    ret += next(); // Transfer both { of escaped brace to output
+                else if (peek() == '}') {
+                    ret += next();      // Transfer the first } to the resulting string
+                    if (peek() != '}')
+                        throw ParsingError(m_lineNo, "Right brace characters must be doubled in f/x string literals.");
                 }
             }
-            else if (fx != 0 && peek() == '}') {
-                ret += next();      // Transfer the first } to the resulting string
-                if (peek() != '}')
-                    throw ParsingError(m_lineNo, "All right braces have to be doubled in f/x string literals.");
 
-                ret += next();      // Transfer the second } to the resulting string
-            }
-            else
-                ret += next();      // A regular literal character
+            ret += next();      // A regular literal character
         }
 
         ret += next();      // Transfer the ending quote
@@ -320,8 +309,8 @@ private:
         return ret;
     }
 
-    // Note: As an expression-field may span multiple input lines using \ or if raw we have to collect the entire expression-field in ret.
-    std::string processField(bool raw) {
+    // Note: As an expression-field may span multiple input lines as for regular source code.
+    std::string processField() {
         std::string ret;            // Field string to return
         std::vector<char> parens;   // Nested parens of different kinds. The left parens are stored. The different cases for corresponding right parens check.
         int ternaries = 0;          // Number of ? operators that need : before we accept a format argument starting :
