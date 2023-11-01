@@ -610,6 +610,17 @@ ve: {})xy", 5)))out" },
     { R"in(f"{foo =}")in",                                                 R"out(std::format("foo ={}", foo ))out" },
     { R"in(f"{foo= }")in",                                                 R"out(std::format("foo= {}", foo))out" },
     { R"in(f"{foo = }")in",                                                R"out(std::format("foo = {}", foo ))out" },
+
+    // Longer example from readme
+    { R"in(std::cout << f"The number of large values is: {
+    std::count_if(myContainer.begin(), myContainer.end(), [&](auto& elem) {
+         return elem.value > largeVal;  // The value member is compared.
+    })
+}, where the limit is {largeVal}";)in",                                    R"out(std::cout << std::format("The number of large values is: {}, where the limit is {}", 
+    std::count_if(myContainer.begin(), myContainer.end(), [&](auto& elem) {
+         return elem.value > largeVal;  // The value member is compared.
+    })
+, largeVal);)out" },
 };
 
 
