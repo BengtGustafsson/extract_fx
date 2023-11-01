@@ -20,7 +20,7 @@ public:
         ParsingError(int lineno, const char* msg) : std::runtime_error(std::format("Line {}: {}", lineno, msg)) {}
     };
 
-    FxExtractor(std::ostream& outFile, std::istream& inFile, const std::string& fname) : m_outFile(outFile), m_inFile(inFile), fname(fname) {}
+    FxExtractor(std::ostream& outFile, std::istream& inFile, const std::string& fname) : m_outFile(outFile), m_inFile(inFile), m_fname(fname) {}
 
     bool process() {
         try {
@@ -38,288 +38,266 @@ public:
     void tryProcess() {
         std::string outLine;
 
-        while (getLine(nullptr)) {
-            // Scan for string literals, skipping preprocessor directives and comments. For now don't skip #ifdef'ed out lines
-            const char* s = m_inLine.c_str();       // We use \0 to see the end. This way we can always access s[1] to see two character tokens such as // and /*
-            while (*s != '\0') {
-                switch (*s) {
+        if (!m_inFile)
+            throw std::runtime_error("Could not open file.");
+        
+        nextLine();
+
+        while (peek() != '\0') {        // Process all lines
+            // Scan for string literals, skipping comments. For now don't skip #ifdef'ed out lines
+            while (peek() != '\n' && peek() != '\0') {
+                switch (peek()) {
                 case '"':
-                    outLine += processStringLiteral(outLine, s);
+                    processStringLiteral(outLine);
                     break;
 
                 case '\'':
-                    outLine += processCharLiteral(s);
+                    outLine += processCharLiteral();
                     break;
 
                 case '/':               // Check for comments.
-                    if (s[1] == '*') {
-                        outLine += processCComment(s);  //  C comments don't need \ last on lines even if this expression is inside a non-raw literal.
+                    if (peek(1) == '*') {
+                        outLine += processCComment();  //  C comments don't need \ last on lines even if this expression is inside a non-raw literal.
                         break;
                     }
-                    else if (s[1] == '/') {
-                        outLine += processCPPComment(s);  //  C++ comments support \ last on lines regardless of if the enclosing literal is raw or not.
+                    else if (peek(1) == '/') {
+                        outLine += processCPPComment();  //  C++ comments support \ last on lines regardless of if the enclosing literal is raw or not.
                         break;
                     }
-                    [[fallthrough]];  
+                    [[fallthrough]];    // No comment start
 
                 default:
-                    outLine += *s++;
-                    break;      // Nothing to do for other characters.
+                    outLine += next();
                 }
             }
 
             m_outFile << outLine;
             if (!m_inFile.eof())            // Preserve lack of last \n char in input.
-                m_outFile << "\n";
+                m_outFile << next();
 
             outLine.clear();
         }
     }
 
 private:
-    bool getLine(const char* err) {
-        if (!m_inFile || m_inFile.eof()) {
-            if (err != nullptr)
-                throw EarlyEnd(err);
-            else
-                return false;
-        }
-
+    bool nextLine() {
         getline(m_inFile, m_inLine);
         m_lineNo++;
+        if (!m_inFile.eof())
+            m_inLine += '\n';
+
+        m_ptr = m_inLine.c_str();
         return true;
     }
 
-    bool checkContinuation(const char* p)
-    {
-        while (p > m_inLine.c_str() && std::isspace(static_cast<unsigned char>(*--p)))
-            ;
+    char peek() { return *m_ptr; }
+    char peek(size_t offset) { return m_ptr[offset]; }
 
-        return *p != '\\';
-    }
-
-    std::string processCPPComment(const char*& s) {
-        assert(*s == '/' && s[1] == '/');
-        auto end = m_inLine.c_str() + m_inLine.size();
-        std::string ret(s, end);                                 // The comment starts with the rest of the current line.
-        while (true) {                                           // But can have continuation lines...
-            if (checkContinuation(end))
-                break;
-
-            // Line ended with \ so the next line is also part of the comment. Rinse and repeat.
-            getLine("Input ends with a line ending in \\.");
-
-            ret += "\n" + m_inLine;
-            end = m_inLine.c_str() + m_inLine.size();
+    char next() {
+        if (*m_ptr == '\n' || *m_ptr == '\0') {
+            nextLine();
+            return '\n';
         }
 
-        s = end;
+        return *m_ptr++;
+    }
+
+    void bump(size_t n) { m_ptr += n; }
+    bool isspace() { return std::isspace(static_cast<unsigned char>(peek())); }
+
+    std::string processCPPComment() {
+        assert(peek() == '/' && peek(1) == '/');
+        std::string ret = "//";
+        bump(2);
+
+        bool backslash = false;     // Set when the last non-whitespace character is a backslash.
+        while (peek() != '\n' || backslash) {            // Comment can have continuation lines...
+            if (peek() == '\0') {
+                if (backslash)
+                    throw EarlyEnd("Input ends with a // comment line ending in \\.");
+                else
+                    return ret;     // Comment line last in file. This is ok.
+            }
+            else if (peek() == '\\')
+                backslash = true;
+            else if (peek() == '\n' || !isspace())
+                backslash = false;
+
+            ret += next();
+        }
+
         return ret;
     }
 
-    std::string processCComment(const char*& s) {
-        assert(*s == '/' && s[1] == '*');
-        std::string ret;
+    std::string processCComment() {
+        assert(peek() == '/' && peek(1) == '*');
+        std::string ret = "/*";;
+        bump(2);
         
-        const char* start = s;
-        s += 2;
-        while (*s == 0 || *s != '*' || s[1] != '/') {
-            if (*s == '\0') {
-                // Line ended in comment. output line and reload buffer.
-                ret.append(start, s);
-                ret += "\n";
-                getLine("/* unmatched to the end of the input.");
+        while (peek() != '*' || peek(1) != '/') {
+            if (peek() == '\0')
+                throw EarlyEnd("/* unmatched to the end of the input.");
 
-                s = m_inLine.c_str();
-                start = s;
-            }
-            else
-                s++;
+            ret += next();
         }
 
-        s += 2;
-        ret.append(start, s);       // Append last part of C comment including trailing */
+        ret += "*/";
+        bump(2);
         return ret;
     }
 
     // Move char literal starting at s to out without touching any of its contents.
-    std::string processCharLiteral(const char*& s) {
-        return processLiteral(s, false, 0, '\'');
-    }
+    std::string processCharLiteral() { return processLiteral(false, 0, '\''); }
 
     // Process a string literal including its prefix.
-    std::string processStringLiteral(std::string& out, const char*& s) {
+    void processStringLiteral(std::string& str) {
         bool raw = false;
-        char fx = 0;       // Can be 0, f or x
-        const char* f = s;
-        if (f > m_inLine.c_str() && f[-1] == 'R') {
+        size_t pos = str.size();
+        if (pos > 0 && str[pos - 1] == 'R') {
             raw = true;
-            f--;
+            pos--;
         }
-        if (f > m_inLine.c_str()) {
-            char c = std::tolower(static_cast<unsigned char>(f[-1]));
+
+        char fx = 0;
+        if (pos > 0) {
+            char c = std::tolower(static_cast<unsigned char>(str[pos - 1]));
             if (c == 'f' || c == 'x') {
                 fx = c;
-                f--;
+                pos--;
             }
         }
 
-        size_t n = s - f;       // 0 - 2 characters to remove as we have to remove the f or x which may be followed by R
-        out.erase(out.size() - n, n);
-        return processLiteral(s, raw, fx);
+        str.erase(pos);
+        str += processLiteral(raw, fx, '"');
     }
 
     // Process a char or string literal according to raw mode, f/x mode and terminator.
-    std::string processLiteral(const char*& s, bool raw, char fx, char terminator = '"') {
+    std::string processLiteral(bool raw, char fx, char terminator) {
         std::string ret;
-
         std::string prefix;
-        assert(*s == terminator);
-        s++;
+
+        assert(peek() == terminator);
 
         // Output the std::format( for f literals only
         if (fx == 'f')
-            ret = fname + "(";
+            ret = m_fname + "(";
 
         // Handle start of literal
-        if (raw) {      // Collect prefix
-            auto begin = s;
-            while (*s != '(') {
-                if (*s == 0)
+        if (raw) {
+            ret += 'R';
+            ret += next();
+            
+            // Collect prefix
+            while (peek() != '(') {
+                if (peek() == '\0' || peek() == '\n')
                     throw ParsingError(m_lineNo, " ends in a raw literal prefix. There must be a ( before the end of line after R\".");
 
-                s++;
+                prefix += next();
             }
-            prefix = std::string(begin, s);
-            s++;        // Pass (
-            ret += "R\"" + prefix + "(";
+            ret += prefix;
+            ret += next();         // add (
         }
         else
-            ret += terminator;
+            ret += next();          // add quote
 
         // Process the actual literal contents.
         std::vector<std::string> fields;       // Can't be string_views as R literals span lines and we only store the last line.
+        bool backslash = false;         // Only used in non-raw case
         while (true) {
             if (raw) {      // Pass raw line ends and try to find prefix
-                if (*s == 0) {
-                    getLine("Input ends in raw literal.");
+                if (peek() == 0)
+                    throw EarlyEnd("Input ends in raw literal.");
 
-                    ret += '\n';
-                    s = m_inLine.c_str();
-                }
-                if (*s == ')') {       // Look for prefix after ) and " after that (even first on a line!)
-                    auto c = prefix.c_str();
-                    auto p = s + 1;  // Pass )
-                    while (*c != '\0') {
-                        if (*p++ != *c++)
+                if (peek() == ')') {       // Look for prefix after ) and " after that.
+                    size_t pix = 0;
+                    while (pix < prefix.size()) {
+                        if (peek(pix + 1) != prefix[pix])   // Note: as prefix can't contain \n or \0 we can always pre-see characters until comparison fails or prefix is complete.
                             break;
+                        
+                        pix++;
                     }
-                    if (p - s == prefix.size() + 1 && *p == terminator) {
+                    if (pix == prefix.size() && peek(pix + 1) == terminator) {
                         // Raw literal ended
-                        ret += ")" + prefix;
-                        s = p;
+                        ret += next();  // The )
+                        ret += prefix;
+                        bump(prefix.size());
                         break;
                     }
                 }
             }
             else {      // Handle continuation lines and escaped quotes in non-raw literals
-                if (*s == '\\') {
-                    // Quoted something or continuation line, which can now have spaces and tabs before the \0. So after \ we must check if
-                    // rest of line is whitespace and if so go to next line.
-                    ret += *s++;        // Pass backslash, it is always copied to the output.
-                    while (true) {
-                        const char* start = s;
-                        if (*s == '\0') {     // Continuation line detected, go get next line.
-                            ret.append(start, s);  // Include the spaces in the output.
-                            ret += '\n';           // And a newline
-                            getLine("Input ends with a \\ last on a line inside a char or string literal.");
-
-                            s = m_inLine.c_str();
-                            break;   // Continue parsing literal on the next line
-                        }
-                        else if (std::isspace(static_cast<unsigned char>(*s)))
-                            s++;
-                        else {
-                            s = start;
-                            ret += *s++;    // A regular escaped character. We don't check if it is one of the escapable ones, that's left for later.
-                            break;      // There was some no-space character, so continue scanning
-                        }
-                    }
-
-                    continue;       // After the backslash + spaces + endline _or_ backslash + spaces + non-space we have to continue checking for backslash.
+                if (peek() == '\\')
+                    backslash = !backslash;
+                else if (peek() == terminator) {
+                    if (backslash)
+                        backslash = false;
+                    else
+                        break;          // Literal ended
                 }
-                else if (*s == terminator)
-                    break;          // Literal ended
-                else if (*s == '\0') 
+                else if (peek() == '\0')
+                    throw EarlyEnd("Input ends inside a char or string literal.");
+                else if (!backslash && peek() == '\n')
                     throw ParsingError(m_lineNo, "Input line ends inside a char or string literal.");
+                else if (peek() == '\n' || !isspace())
+                    backslash = false;
             }
             
-            if (fx != 0 && *s == '{') {
-                s++;      // Transfer the { to the resulting string
-                if (*s != '{') {
-                    // Find the end of the inserted expression. Basically scan for : or } but ignore as many colons as there are ? and
-                    // skip through all parentheses, except in string literals.
-                    std::string field = processField(s, raw);
+            if (fx != 0) {
+                if (peek() == '{') {
+                    next();
+                    if (peek() != '{') {
+                        std::string field = processField();
 
-                    size_t pos = field.size();
-                    while (pos > 0 && std::isspace(static_cast<unsigned char>(field[pos - 1])))
-                        pos--;
+                        // Check for expression-field ending in = +optional spaces.
+                        size_t pos = field.size();
+                        while (pos > 0 && std::isspace(static_cast<unsigned char>(field[pos - 1])))
+                            pos--;
 
-                    if (field[pos - 1] == '=') {  // Debug style field where expression ends in =
-                        ret += field;
-                        field.erase(pos - 1);   // Remove = and trailing spaces from field.
-                    }
-                    ret += '{';
+                        if (field[pos - 1] == '=') {  // Debug style field where expression ends in =
+                            ret += field;
+                            field.erase(pos - 1);   // Remove = and trailing spaces from field.
+                        }
 
-                    fields.push_back(std::move(field));
-                    // If : check for nested fields in the format-spec
-                    if (*s == ':') {
-                        ret += *s++;      // Transfer the : to the resulting string
-                        while (*s != '}') {
-                            if (*s == 0) {
-                                // If not raw the line must end by a \ as we're now in the part of the literal that's preserved to the output literal.
-                                if (!raw) {
-                                    if (!checkContinuation(s))
-                                        throw ParsingError(m_lineNo, "Found unescaped end of line inside format-spec in non-raw literal");
+                        ret += '{';     // After automatically generated label, if any.
+
+                        fields.push_back(std::move(field));
+                        // If : check for nested fields in the format-spec
+                        if (peek() == ':') {
+                            ret += next();      // Transfer the : to the resulting string
+                            while (peek() != '}') {
+                                if (peek() == '\0')
+                                    EarlyEnd("Input ends inside format-spec");
+
+                                if (peek() == '{') {    // Nested field starts
+                                    ret += next();
+
+                                    // Find the end of the expression-field. Basically scan for : or } but ignore as many colons as there are ? and
+                                    // skip through all parentheses, except in string literals.
+                                    std::string field = processField();
+
+                                    fields.push_back(std::move(field));
+                                    if (peek() != '}')   // Colon not allowed inside nested expression-field.
+                                        throw ParsingError(m_lineNo, "Found nested expression-field ending in :. This is not allowed.");
                                 }
-                                getLine("Input ends inside format-spec");
 
-                                s = m_inLine.c_str();
+                                ret += next();      // Transfer other formatting argument char to the resulting string
                             }
-                            if (*s == '{') {    // Nested field starts
-                                s++;    // Pass {
-
-                                // Find the end of the expression-field. Basically scan for : or } but ignore as many colons as there are ? and
-                                // skip through all parentheses, except in string literals.
-                                std::string field = processField(s, raw);
- 
-                                ret += '{';      // Transfer a { to the resulting string
-
-                                fields.push_back(std::move(field));
-                                if (*s != '}')   // Colon not allowed inside nested expression-field.
-                                    throw ParsingError(m_lineNo, "Found nested expression-field ending in :. This is not allowed.");
-                            }
-
-                            ret += *s++;      // Transfer the } or other formatting argument char to the resulting string
                         }
                     }
-                    ret += *s++;   // Push the } to the output. Must be done separately as other right braces need to be doubled.
+                    else
+                        ret += '{';   // The first { transferred for double left braces. The second is transferred as the "normal" literal character.
                 }
-                else {
-                    ret += '{';
-                    s++;        // Pass the second { in a double brace quote situation.
+                else if (peek() == '}') {
+                    ret += next();      // Transfer the first } to the resulting string
+                    if (peek() != '}')
+                        throw ParsingError(m_lineNo, "Right brace characters must be doubled in f/x string literals.");
                 }
             }
-            else if (fx != 0 && *s == '}') {
-                ret += *s++;      // Transfer the first } to the resulting string
-                if (*s++ != '}')
-                    throw ParsingError(m_lineNo, "All right braces have to be doubled in f/x string literals.");
-            }
-            else
-                ret += *s++;
+
+            ret += next();      // A regular literal character
         }
 
-        ret += *s++;      // Transfer the ending quote
+        ret += next();      // Transfer the ending quote
 
         // Emit all extracted field expressions.
         for (auto& field : fields)
@@ -331,122 +309,102 @@ private:
         return ret;
     }
 
-    // Note: As an expression-field may span multiple input lines using \ or if raw we have to collect the entire expression-field in ret.
-    std::string processField(const char*& s, bool raw) {
+    // Note: As an expression-field may span multiple input lines as for regular source code.
+    std::string processField() {
         std::string ret;            // Field string to return
-        std::vector<char> parens;   // Nested parens of different kinds
+        std::vector<char> parens;   // Nested parens of different kinds. The left parens are stored. The different cases for corresponding right parens check.
         int ternaries = 0;          // Number of ? operators that need : before we accept a format argument starting :
 
-        auto lineEnds = [&](const char* err) {
-            assert(*s == '\0');
-
-            ret += '\n';
-            getLine(err);
-
-            s = m_inLine.c_str();
-        };
-
-        // Check if a \ is a line continuation and if so add the rest of the line to ret and position s at the start of next line.
-        // If not append \ and return false
-        auto isContinuation = [&]() {
-            assert(*s == '\\');
-            ret += *s++;        // Output the backslash
-            const char* p = s;
-            while (true) {
-                if (*p == '\0') {     // Continuation line detected, go get next line.
-                    lineEnds("Input ends with a \\ last on a line inside an expression-field.");
-                    return true;   // Continue parsing 
-                }
-                else if (std::isspace(static_cast<unsigned char>(*p)))
-                    p++;
-                else
-                    return false;      // There was some non-space character, the \ was something else to be handled later.
-            }
-        };
-
-        while (parens.size() > 0 || ternaries > 0 || *s != '}') {
-            if (parens.size() > 0 && *s == parens.back()) {     // Check for matching right parens
-                ret += *s++;
-                parens.pop_back();
-                continue;
-            }
-
-            switch (*s) {
+        while (true) {
+            switch (peek()) {
             case '\0':
-                lineEnds("Input ends inside an expression-field in a raw literal.");
-                break;
+                throw EarlyEnd("Input ends inside an expression-field in a literal.");
 
             case '(':
-                parens.push_back(')');
-                ret += *s++;
-                break;
-
-            case '{':
-                parens.push_back('}');
-                ret += *s++;
-                break;
-
             case '[':
-                parens.push_back(']');
-                ret += *s++;
+            case '{':
+                parens.push_back(peek());
+                ret += next();
+                break;
+
+            case ')':
+                if (parens.empty() || parens.back() != '(')
+                    throw ParsingError(m_lineNo, "Mismatched ) in expression-field");
+
+                parens.pop_back();
+                ret += next();
+                break;
+                    
+            case ']':
+                if (parens.empty() || parens.back() != '[')
+                    throw ParsingError(m_lineNo, "Mismatched [ in expression-field");
+
+                parens.pop_back();
+                ret += next();
+                break;
+
+            case '}':
+                if (parens.empty()) {
+                    if (ternaries > 0)
+                        throw ParsingError(m_lineNo, "Found } in expression-field when there were ? operators without matching :");
+                        
+                    return ret;
+                }
+
+                if (parens.back() != '{')
+                    throw ParsingError(m_lineNo, "Mismatched } in expression-field");
+
+                parens.pop_back();
+                ret += next();
                 break;
 
             case '?':
                 if (parens.empty())
                     ternaries++;
 
-                ret += *s++;
+                ret += next();
                 break;
 
             case ':':
-                if (s[1] == ':')
-                    ret += *s++; // Double colon is always a scoping operator
+                if (peek(1) == ':')
+                    ret += next(); // Double colon is always a scoping operator
                 else {
-                    if (parens.empty() && ternaries == 0)
-                        return ret;
+                    if (parens.empty()) {
+                        if (ternaries == 0)
+                            return ret;
 
-                    if (parens.empty())
                         ternaries--;
+                    }
                 }
                 
-                ret += *s++;
+                ret += next();
                 break;
 
-            case '\\':          // Check for continuation line. If found add previous contents to ret.
-                if (raw)        // No continuation lines in raw literals.
-                    ret += *s++;
-                else {
-                    if (!isContinuation())        // It was not a continuation line, s has not been reset.
-                        ret += *s++;                // Pass the escaped character unless it was a proper line ending.
-                }
+            case '"':
+                processStringLiteral(ret);
                 break;
 
-            case '"': {
-                ret += processStringLiteral(ret, s);
+            case '\'':
+                ret += processCharLiteral();
                 break;
-            }
-
-            case '\'': {
-                ret += processCharLiteral(s);
-                break;
-            }
 
             case '/':               // Check for comments.
-                if (s[1] == '*') {
-                    ret += processCComment(s);  //  C comments don't need \ last on lines even if this expression is inside a non-raw literal.
+                if (peek(1) == '*') {
+                    ret += processCComment();  //  C comments don't need \ last on lines even if this expression is inside a non-raw literal.
                     break;
                 }
-                else if (s[1] == '/') {
-                    ret += processCPPComment(s) + "\n";;  //  C++ comments support \ last on lines regardless of if the enclosing literal is raw or not.
-                    getLine("Input ends with a // comment inside a expression-field");
+                else if (peek(1) == '/') {
+                    ret += processCPPComment();  //  C++ comments support \ last on lines regardless of if the enclosing literal is raw or not.
+                    if (peek() == '\0')
+                        throw EarlyEnd("Input ends with a // comment inside a expression-field");
 
-                    s = m_inLine.c_str();
                     break;
                 }
-                [[fallthrough]];  
+
+                [[fallthrough]];  // Not a comment
 
             default:
-                ret += *s++;
+                ret += next();
                 break;      // Nothing to do for other characters.
             }
         }
@@ -454,12 +412,14 @@ private:
         return ret;
     }
 
-    std::ostream& m_outFile;
-    std::istream& m_inFile;
-    std::string fname;
+    std::string m_fname;            // Name of function to wrap f-literals in.
 
+    std::istream& m_inFile;
     std::string m_inLine; 
+    const char* m_ptr;
     int m_lineNo = 0;
+
+    std::ostream& m_outFile;
 };
 
 
@@ -560,7 +520,7 @@ x')in", },                             // Test continuation line inside char lit
     { R"in(f"The number is: {MyType{}}")in",                               R"out(std::format("The number is: {}", MyType{}))out" },
 
     // Test escaping with double braces.
-    { R"in(f"Just braces {{a}} {a}")in",                                   R"out(std::format("Just braces {a} {}", a))out" },
+    { R"in(f"Just braces {{a}} {a}")in",                                   R"out(std::format("Just braces {{a}} {}", a))out" },
     { R"in(f"Use colon colon {std::rand()}")in",                           R"out(std::format("Use colon colon {}", std::rand()))out" },
     { R"in(f"Use colon colon {std::rand():fmt}")in",                       R"out(std::format("Use colon colon {:fmt}", std::rand()))out" },
 
@@ -579,6 +539,9 @@ x')in", },                             // Test continuation line inside char lit
     { R"in(f"The number is: {3 /* comment \
 continues */ * 5}")in",                                                    R"out(std::format("The number is: {}", 3 /* comment \
 continues */ * 5))out" },
+   { R"in(f"The number is: {3 /* comment
+continues */ * 5}")in",                                                    R"out(std::format("The number is: {}", 3 /* comment
+continues */ * 5))out" },
 
     { R"in(xR"(The numbers are: {a} and {b})")in",                         R"out(R"(The numbers are: {} and {})", a, b)out" },
     { R"in(xR"xy(The numbers are: {a} and {b})xy")in",                     R"out(R"xy(The numbers are: {} and {})xy", a, b)out" },
@@ -596,6 +559,19 @@ xy) )" yx)" continues */ * 5))out" },
     { R"in(fR"xy(The number is: {3 // comment
  * 5})xy")in",                                                             R"out(std::format(R"xy(The number is: {})xy", 3 // comment
  * 5))out" },
+    { R"in(f"The number is: {3 // comment \
+foo
+ * 5}")in",                                                                R"out(std::format("The number is: {}", 3 // comment \
+foo
+ * 5))out" },
+    { R"in(fR"xy(The number is: {3 // comment
+ * 5})xy")in",                                                             R"out(std::format(R"xy(The number is: {})xy", 3 // comment
+ * 5))out" },
+    { R"in(fR"xy(The number is: {3 // comment \
+fum
+ * 5})xy")in",                                                             R"out(std::format(R"xy(The number is: {})xy", 3 // comment \
+fum
+ * 5))out" },
 
     // Negative tests
     { R"in(f"Just braces {{} {a}")in", nullptr, false },                   // } have to be doubled when not ending an expression-field
@@ -609,8 +585,10 @@ xy) )" yx)" continues */ * 5))out" },
     { R"in(f"The number is: {3 * 5 /*comment ")in", nullptr, false },      // Literal ends inside comment in an expression-field
     { R"in(fR"x(The number is: {3 * 5 /*comment )x")in", nullptr, false }, // Literal ends inside comment in an expression-field in a raw literal
     { R"in(f"The number is: {3 * 5 /*comment\)in", nullptr, false },       // Input ends inside comment in an expression-field
+    { R"in(f"The number is: {3 // comment * 5}")in",  nullptr, false },    // Input ends with C++ comment, * 5} and " not seen as they are part of the comment
+    { R"in(f"The number is: {3 // comment \
+ * 5}")in",  nullptr, false },                                             // Input ends with C++ comment continuing on next line, * 5} and " not seen as they are part of the comment
 
-    // Test literals in expression-field expressions.
     { R"in(f"The number is: {std::strchr("He{ } j", '"')}")in",            R"out(std::format("The number is: {}", std::strchr("He{ } j", '"')))out" },
     { R"in(f"The number is: {std::strchr(R"(Hej)", '\'')}")in",            R"out(std::format("The number is: {}", std::strchr(R"(Hej)", '\'')))out" },
     { R"in(f"The number is: {std::strchr(R"xy(Hej
@@ -632,6 +610,17 @@ ve: {})xy", 5)))out" },
     { R"in(f"{foo =}")in",                                                 R"out(std::format("foo ={}", foo ))out" },
     { R"in(f"{foo= }")in",                                                 R"out(std::format("foo= {}", foo))out" },
     { R"in(f"{foo = }")in",                                                R"out(std::format("foo = {}", foo ))out" },
+
+    // Longer example from readme
+    { R"in(std::cout << f"The number of large values is: {
+    std::count_if(myContainer.begin(), myContainer.end(), [&](auto& elem) {
+         return elem.value > largeVal;  // The value member is compared.
+    })
+}, where the limit is {largeVal}";)in",                                    R"out(std::cout << std::format("The number of large values is: {}, where the limit is {}", 
+    std::count_if(myContainer.begin(), myContainer.end(), [&](auto& elem) {
+         return elem.value > largeVal;  // The value member is compared.
+    })
+, largeVal);)out" },
 };
 
 
