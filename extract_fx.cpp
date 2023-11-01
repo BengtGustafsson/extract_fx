@@ -101,18 +101,16 @@ private:
         return *m_ptr++;
     }
 
-    std::string next(size_t n) {
-        std::string ret(m_ptr, n);
+    void bump(size_t n) {
         m_ptr += n;
-        return ret;
     }
 
     bool isspace() { return std::isspace(static_cast<unsigned char>(peek())); }
 
     std::string processCPPComment() {
         assert(peek() == '/' && peek(1) == '/');
-        std::string ret;
-        ret += next(2);
+        std::string ret = "//";
+        bump(2);
 
         bool backslash = false;
         while (peek() != '\n' || backslash) {                                           // But can have continuation lines...
@@ -135,8 +133,8 @@ private:
 
     std::string processCComment() {
         assert(peek() == '/' && peek(1) == '*');
-        std::string ret;
-        ret += next(2);
+        std::string ret = "/*";;
+        bump(2);
         
         while (peek() != '*' || peek(1) != '/') {
             if (peek() == '\0')
@@ -145,7 +143,8 @@ private:
             ret += next();
         }
 
-        ret += next(2);
+        ret += "*/";
+        bump(2);
         return ret;
     }
 
@@ -224,7 +223,8 @@ private:
                     }
                     if (pix == prefix.size() && peek(pix) == terminator) {
                         // Raw literal ended
-                        ret += next(prefix.size());
+                        ret += prefix;
+                        bump(prefix.size());
                         break;
                     }
                 }
