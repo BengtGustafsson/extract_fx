@@ -48,7 +48,7 @@ public:
             while (peek() != '\n' && peek() != '\0') {
                 switch (peek()) {
                 case '"':
-                    outLine += processStringLiteral();
+                    processStringLiteral(outLine);
                     break;
 
                 case '\'':
@@ -73,7 +73,7 @@ public:
 
             m_outFile << outLine;
             if (!m_inFile.eof())            // Preserve lack of last \n char in input.
-                m_outFile << "\n";
+                m_outFile << next();
 
             outLine.clear();
         }
@@ -81,11 +81,11 @@ public:
 
 private:
     bool nextLine() {
-        if (m_inFile.eof())
-            return false;
-
         getline(m_inFile, m_inLine);
         m_lineNo++;
+        if (!m_inFile.eof())
+            m_inLine += '\n';
+
         m_ptr = m_inLine.c_str();
         return true;
     }
@@ -93,28 +93,18 @@ private:
     char peek(size_t offset = 0) { return m_ptr[offset]; }
 
     char next() {
-        char ret = *m_ptr++;
-        if (ret == '\0') {
-            if (nextLine())
-                return '\n';
-            else
-                return '\0';
+        if (*m_ptr == '\n' ||*m_ptr == '\0') {
+            nextLine();
+            return '\n';
         }
 
-        return ret;
+        return *m_ptr++;
     }
 
     std::string next(size_t n) {
         std::string ret(m_ptr, n);
         m_ptr += n;
         return ret;
-    }
-
-    char prev(ptrdiff_t n) {
-        if (m_ptr - n < m_inLine.c_str())
-            return '\0';
-
-        return m_ptr[-n];
     }
 
     bool isspace() { return std::isspace(static_cast<unsigned char>(peek())); }
@@ -128,14 +118,14 @@ private:
         while (peek() != '\n' || backslash) {                                           // But can have continuation lines...
             if (peek() == '\0') {
                 if (backslash)
-                    throw EarlyEnd("Input ends with a line ending in \\.");
+                    throw EarlyEnd("Input ends with a // comment line ending in \\.");
                 else
                     return ret;     // Comment line last in file. Ok.
             }
-            else if (peek() == '\n' || !isspace())
-                backslash = false;
             else if (peek() == '\\')
                 backslash = true;
+            else if (peek() == '\n' || !isspace())
+                backslash = false;
 
             ret += next();
         }
@@ -165,19 +155,25 @@ private:
     }
 
     // Process a string literal including its prefix.
-    std::string processStringLiteral() {
+    void processStringLiteral(std::string& str) {
         bool raw = false;
-        char c = prev(1);
-        if (c == 'R') {
+        size_t pos = str.size();
+        if (pos > 0 && str[pos - 1] == 'R') {
             raw = true;
-            c = prev(2);
-        }
-        char fx = std::tolower(static_cast<unsigned char>(c));
-        if (fx != 'f' && fx != 'x') {
-            fx = 0;
+            pos--;
         }
 
-        return processLiteral(raw, fx, '"');
+        char fx = 0;
+        if (pos > 0) {
+            char c = std::tolower(static_cast<unsigned char>(str[pos - 1]));
+            if (c == 'f' || c == 'x') {
+                fx = c;
+                pos--;
+            }
+        }
+
+        str.erase(pos);
+        str += processLiteral(raw, fx, '"');
     }
 
     // Process a char or string literal according to raw mode, f/x mode and terminator.
@@ -192,19 +188,22 @@ private:
             ret = m_fname + "(";
 
         // Handle start of literal
-        if (raw) {              // Collect prefix
-            next();              // Pass ", not part of prefix string
+        if (raw) {
+            ret += 'R';
+            ret += next();
+            
+            // Collect prefix
             while (peek() != '(') {
-                if (peek() == 0 || peek() == '\n')
+                if (peek() == '\0' || peek() == '\n')
                     throw ParsingError(m_lineNo, " ends in a raw literal prefix. There must be a ( before the end of line after R\".");
 
                 prefix += next();
             }
-            next();             // Pass (, not part of prefix string.
-            ret += "R\"" + prefix + "(";
+            ret += prefix;
+            ret += next();         // add (
         }
         else
-            ret += next();      // Terminator
+            ret += next();          // add quote
 
         // Process the actual literal contents.
         std::vector<std::string> fields;       // Can't be string_views as R literals span lines and we only store the last line.
@@ -220,10 +219,12 @@ private:
                     while (pix < prefix.size()) {
                         if (peek(pix) != prefix[pix])
                             break;
+                        
+                        pix++;
                     }
                     if (pix == prefix.size() && peek(pix) == terminator) {
                         // Raw literal ended
-                        ret += next(prefix.size() + 1);
+                        ret += next(prefix.size());
                         break;
                     }
                 }
@@ -246,7 +247,8 @@ private:
             }
             
             if (fx != 0 && peek() == '{') {
-                if (peek(1) != '{') {
+                next();
+                if (peek() != '{') {
                     // Find the end of the inserted expression. Basically scan for : or } but ignore as many colons as there are ? and
                     // skip through all parentheses, except in string literals.
                     std::string field = processField(raw);
@@ -277,19 +279,23 @@ private:
                                 // Find the end of the expression-field. Basically scan for : or } but ignore as many colons as there are ? and
                                 // skip through all parentheses, except in string literals.
                                 std::string field = processField(raw);
- 
+
                                 fields.push_back(std::move(field));
                                 if (peek() != '}')   // Colon not allowed inside nested expression-field.
                                     throw ParsingError(m_lineNo, "Found nested expression-field ending in :. This is not allowed.");
                                 backslash = false;
                             }
 
-                            ret += next();      // Transfer the trailing } or other formatting argument char to the resulting string
+                            ret += next();      // Transfer other formatting argument char to the resulting string
                         }
                     }
+
+                    ret += next();      // Transfer the trailing }
                 }
-                else
-                    ret += next(2); // Transfer both { of escaped brace to output
+                else {
+                    ret += '{';
+                    ret += next(); // Transfer both { of escaped brace to output
+                }
             }
             else if (fx != 0 && peek() == '}') {
                 ret += next();      // Transfer the first } to the resulting string
@@ -337,6 +343,7 @@ private:
                     throw ParsingError(m_lineNo, "Mismatched ) in expression-field");
 
                 parens.pop_back();
+                ret += next();
                 break;
                     
             case ']':
@@ -344,6 +351,7 @@ private:
                     throw ParsingError(m_lineNo, "Mismatched [ in expression-field");
 
                 parens.pop_back();
+                ret += next();
                 break;
 
             case '}':
@@ -358,6 +366,7 @@ private:
                     throw ParsingError(m_lineNo, "Mismatched } in expression-field");
 
                 parens.pop_back();
+                ret += next();
                 break;
 
             case '?':
@@ -383,7 +392,7 @@ private:
                 break;
 
             case '"':
-                ret += processStringLiteral();
+                processStringLiteral(ret);
                 break;
 
             case '\'':
@@ -522,7 +531,7 @@ x')in", },                             // Test continuation line inside char lit
     { R"in(f"The number is: {MyType{}}")in",                               R"out(std::format("The number is: {}", MyType{}))out" },
 
     // Test escaping with double braces.
-    { R"in(f"Just braces {{a}} {a}")in",                                   R"out(std::format("Just braces {a} {}", a))out" },
+    { R"in(f"Just braces {{a}} {a}")in",                                   R"out(std::format("Just braces {{a}} {}", a))out" },
     { R"in(f"Use colon colon {std::rand()}")in",                           R"out(std::format("Use colon colon {}", std::rand()))out" },
     { R"in(f"Use colon colon {std::rand():fmt}")in",                       R"out(std::format("Use colon colon {:fmt}", std::rand()))out" },
 
