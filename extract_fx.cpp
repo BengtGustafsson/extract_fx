@@ -208,17 +208,17 @@ private:
                 if (peek() == 0)
                     throw EarlyEnd("Input ends in raw literal.");
 
-                if (peek() == ')') {       // Look for prefix after ) and " after that
-                    ret += next();      // )
+                if (peek() == ')') {       // Look for prefix after ) and " after that.
                     size_t pix = 0;
                     while (pix < prefix.size()) {
-                        if (peek(pix) != prefix[pix])   // Note: as prefix can't contain \n or \0 we can always pre-see characters until comparison fails or prefix is complete.
+                        if (peek(pix + 1) != prefix[pix])   // Note: as prefix can't contain \n or \0 we can always pre-see characters until comparison fails or prefix is complete.
                             break;
                         
                         pix++;
                     }
-                    if (pix == prefix.size() && peek(pix) == terminator) {
+                    if (pix == prefix.size() && peek(pix + 1) == terminator) {
                         // Raw literal ended
+                        ret += next();  // The )
                         ret += prefix;
                         bump(prefix.size());
                         break;
