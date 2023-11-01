@@ -550,6 +550,9 @@ x')in", },                             // Test continuation line inside char lit
     { R"in(f"The number is: {3 /* comment \
 continues */ * 5}")in",                                                    R"out(std::format("The number is: {}", 3 /* comment \
 continues */ * 5))out" },
+   { R"in(f"The number is: {3 /* comment
+continues */ * 5}")in",                                                    R"out(std::format("The number is: {}", 3 /* comment
+continues */ * 5))out" },
 
     { R"in(xR"(The numbers are: {a} and {b})")in",                         R"out(R"(The numbers are: {} and {})", a, b)out" },
     { R"in(xR"xy(The numbers are: {a} and {b})xy")in",                     R"out(R"xy(The numbers are: {} and {})xy", a, b)out" },
@@ -567,6 +570,19 @@ xy) )" yx)" continues */ * 5))out" },
     { R"in(fR"xy(The number is: {3 // comment
  * 5})xy")in",                                                             R"out(std::format(R"xy(The number is: {})xy", 3 // comment
  * 5))out" },
+    { R"in(f"The number is: {3 // comment \
+foo
+ * 5}")in",                                                                R"out(std::format("The number is: {}", 3 // comment \
+foo
+ * 5))out" },
+    { R"in(fR"xy(The number is: {3 // comment
+ * 5})xy")in",                                                             R"out(std::format(R"xy(The number is: {})xy", 3 // comment
+ * 5))out" },
+    { R"in(fR"xy(The number is: {3 // comment \
+fum
+ * 5})xy")in",                                                             R"out(std::format(R"xy(The number is: {})xy", 3 // comment \
+fum
+ * 5))out" },
 
     // Negative tests
     { R"in(f"Just braces {{} {a}")in", nullptr, false },                   // } have to be doubled when not ending an expression-field
@@ -580,8 +596,10 @@ xy) )" yx)" continues */ * 5))out" },
     { R"in(f"The number is: {3 * 5 /*comment ")in", nullptr, false },      // Literal ends inside comment in an expression-field
     { R"in(fR"x(The number is: {3 * 5 /*comment )x")in", nullptr, false }, // Literal ends inside comment in an expression-field in a raw literal
     { R"in(f"The number is: {3 * 5 /*comment\)in", nullptr, false },       // Input ends inside comment in an expression-field
+    { R"in(f"The number is: {3 // comment * 5}")in",  nullptr, false },    // Input ends with C++ comment, * 5} and " not seen as they are part of the comment
+    { R"in(f"The number is: {3 // comment \
+ * 5}")in",  nullptr, false },                                             // Input ends with C++ comment continuing on next line, * 5} and " not seen as they are part of the comment
 
-    // Test literals in expression-field expressions.
     { R"in(f"The number is: {std::strchr("He{ } j", '"')}")in",            R"out(std::format("The number is: {}", std::strchr("He{ } j", '"')))out" },
     { R"in(f"The number is: {std::strchr(R"(Hej)", '\'')}")in",            R"out(std::format("The number is: {}", std::strchr(R"(Hej)", '\'')))out" },
     { R"in(f"The number is: {std::strchr(R"xy(Hej
