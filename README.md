@@ -2,7 +2,7 @@
 
 This program was written to support an upcoming proposal to introduce the idea of f-literals in C++ as a more or less textual transformation performed by the preprocessor..
 
-Here is the proposal as of October 10: [Proposal by Hadriel Kaplan](http://api.csswg.org/bikeshed/?url=https://raw.githubusercontent.com/hadrielk/cpp-proposals/main/f-string/f-string-r2.bs&force=1)
+Here is the proposal as of October 25: [Proposal by Hadriel Kaplan](http://api.csswg.org/bikeshed/?url=https://raw.githubusercontent.com/hadrielk/cpp-proposals/main/f-string/f-string-r2.bs&force=1)
 
 ## Examples
 
@@ -37,7 +37,7 @@ std::format("Two decimals: {:.2}, N decimals: {std::sqrt(2.0):.{N}}", std::sqrt(
 // Comments and nested literals are available inside extraction-expressions without
 // any special escaping of quotes.
 std::cout << f"The number of large values is: {
-    rng::count_if(myContainer.begin(), myContainer.end(), [&](auto& elem) { 
+    std::count_if(myContainer.begin(), myContainer.end(), [&](auto& elem) { 
          return elem.value > largeVal;  // The value member is compared.
     })
 }, where the limit is {largeVal}";
@@ -50,7 +50,8 @@ So far the proposal is not concrete enough to be able to tell if this implementa
 of concept for a variant of the proposal where expressions-fields can be written verbatim as if they were outside the literal, i.e.
 with non-escaped string literals and comments.
 
-A quick debug output feature available in Python f-literals is also implemented in extract_fx: If an expression ends with a = character (apart from whitespace) the expression is output as a label too, so to easily print values of some variables just do:
+A quick debug output feature available in Python f-literals is also implemented in extract_fx: If an expression ends with a =
+character (apart from whitespace) the expression is output as a label too, so to easily print values of some variables just do:
 
 ```c++
 std::print(f"{a=}, {b = }");
@@ -65,7 +66,11 @@ While tools that scan source code would be required to do more work to find the 
 such tools would have to the full processing of the contents of f/x literals anyway as they contain executable code, subject to for
 instance static analysis. so this is not a strong argument for requiring escaping of quotes inside expression-fields.
 
-Some tools, like this documentation generator, however has a too limited parsing capability which is obvious from the coloring above. This tool (Typora) does not even handle raw literals so its basically a lost cause to get it to handle embedded expressions-fields.
+Some tools, like this documentation generator, however has a too limited parsing capability which is obvious from the coloring
+above. This tool (Typora) does not even handle raw literals so its basically a lost cause to get it to handle embedded
+expressions-fields.
+
+Here is a grammar for the string-literal [grammar](grammar.md)
 
 ## Limitations
 
@@ -89,7 +94,10 @@ target and a pre-preprocessing step is added to the generated build files.
 
 ## Experimentation environment.
 
-A file `format_literal.h` is supplied which contains a  subclass of std::string called `extracted_string`. Overloads of `print` and `println` are provided which take just this std::string subclass. With this the supplied demo program `format_literal_test.cpi` can be compiled. It contains the following uses of f-literals. Note however that std::println is not part of the overload set here as I didn't put the new `println` overload in namespace std.
+A file `format_literal.h` is supplied which contains a subclass of std::string called `extracted_string`. Overloads of `print` and
+`println` are provided which take just this std::string subclass. With this the supplied demo program `format_literal_test.cpi` can
+be compiled. It contains the following uses of f-literals. Note however that std::println is not part of the overload set here as I
+didn't put the new `println` overload in namespace std.
 
 ```C++
 #include "format_literal.h"
@@ -113,7 +121,7 @@ f-literal is surely a mistake.
 Without command line arguments extract_fx works like a Unix filter reading from stdin and writing to stdout. Note that with long f/x
 literals and/or expression-fields output will be withheld until enough input lines have been seen. This also happens for multiline comments.
 
-An option **--name** is available for experimentation. It controls the name of the function that f-literals are wrapped in. It defaults to `std::format`. The CMakeLists macro `target_extract_file` adds a custom build step which has a --name parameter set to `extracted_string`.
+An option **--name** is available for experimentation. It controls the name of the function that f-literals are wrapped in. It defaults to `std::format`. The CMakeLists macro `target_extract_file` adds a custom build step which has a **--name** parameter set to `extracted_string`.
 
 An option **--test** causes the built in unit tests to run. This can't be combined with any other parameters.
 
