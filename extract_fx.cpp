@@ -17,7 +17,7 @@ public:
     };
     class ParsingError : public std::runtime_error {
     public:
-        ParsingError(int lineno, const char* msg) : std::runtime_error(std::format("Line {}: {}", lineno, msg)) {}
+        ParsingError(int lineno, std::string_view msg) : std::runtime_error(std::format("Line {}: {}", lineno, msg)) {}
     };
 
     FxExtractor(std::ostream& outFile, std::istream& inFile, const std::string& fname) : m_outFile(outFile), m_inFile(inFile), m_fname(fname) {}
@@ -245,45 +245,8 @@ private:
             if (fx != 0) {
                 if (peek() == '{') {
                     next();
-                    if (peek() != '{') {
-                        std::string field = processField();
-
-                        // Check for expression-field ending in = +optional spaces.
-                        size_t pos = field.size();
-                        while (pos > 0 && std::isspace(static_cast<unsigned char>(field[pos - 1])))
-                            pos--;
-
-                        if (field[pos - 1] == '=') {  // Debug style field where expression ends in =
-                            ret += field;
-                            field.erase(pos - 1);   // Remove = and trailing spaces from field.
-                        }
-
-                        ret += '{';     // After automatically generated label, if any.
-
-                        fields.push_back(std::move(field));
-                        // If : check for nested fields in the format-spec
-                        if (peek() == ':') {
-                            ret += next();      // Transfer the : to the resulting string
-                            while (peek() != '}') {
-                                if (peek() == '\0')
-                                    EarlyEnd("Input ends inside format-spec");
-
-                                if (peek() == '{') {    // Nested field starts
-                                    ret += next();
-
-                                    // Find the end of the expression-field. Basically scan for : or } but ignore as many colons as there are ? and
-                                    // skip through all parentheses, except in string literals.
-                                    std::string field = processField();
-
-                                    fields.push_back(std::move(field));
-                                    if (peek() != '}')   // Colon not allowed inside nested expression-field.
-                                        throw ParsingError(m_lineNo, "Found nested expression-field ending in :. This is not allowed.");
-                                }
-
-                                ret += next();      // Transfer other formatting argument char to the resulting string
-                            }
-                        }
-                    }
+                    if (peek() != '{')
+                        ret += processExtractionField(fields);
                     else
                         ret += '{';   // The first { transferred for double left braces. The second is transferred as the "normal" literal character.
                 }
@@ -309,100 +272,88 @@ private:
         return ret;
     }
 
-    // Note: As an expression-field may span multiple input lines as for regular source code.
-    std::string processField() {
+    // Parse an extraction field and add its contained expression(s) to fields. Return the remaining literal part such as {} or {:xxx}
+    std::string processExtractionField(std::vector<std::string>& fields) {
+        std::string ret;
+
+        std::string field = processExpressionField();
+        // Check for expression-field ending in = +optional spaces.
+        size_t pos = field.size();
+        while (pos > 0 && std::isspace(static_cast<unsigned char>(field[pos - 1])))
+            pos--;
+
+        if (field[pos - 1] == '=') {  // Debug style field where expression ends in =
+            ret += field;
+            field.erase(pos - 1);   // Remove = and trailing spaces from field.
+        }
+
+        ret += '{';     // After automatically generated label, if any.
+
+        fields.push_back(std::move(field));
+        // If : check for nested fields in the format-spec
+        if (peek() == ':') {
+            ret += next();      // Transfer the : to the resulting string
+            while (peek() != '}') {
+                if (peek() == '\0')
+                    EarlyEnd("Input ends inside format-spec");
+
+                if (peek() == '{') {    // Nested field starts
+                    ret += next();
+
+                    // Find the end of the expression-field. Basically scan for : or } but ignore as many colons as there are ? and
+                    // skip through all parentheses, except in string literals.
+                    std::string field = processExpressionField();
+
+                    fields.push_back(std::move(field));
+                    if (peek() != '}')   // Colon not allowed inside nested expression-field.
+                        throw ParsingError(m_lineNo, "Found nested expression-field ending in :. This is not allowed.");
+                }
+
+                ret += next();      // Transfer other formatting argument char to the resulting string
+            }
+        }
+
+        return ret;
+    }
+    
+    // Parse a top level part of an expression field until a colon or right brace is encountered. Ignore double colons, recurse on
+    // ?, (, [, {.
+    // Pre: just after {
+    // Post: peek() == '}' or ':'
+    std::string processExpressionField() {
         std::string ret;            // Field string to return
-        std::vector<char> parens;   // Nested parens of different kinds. The left parens are stored. The different cases for corresponding right parens check.
-        int ternaries = 0;          // Number of ? operators that need : before we accept a format argument starting :
 
         while (true) {
+            processNested(ret);
+
             switch (peek()) {
-            case '\0':
-                throw EarlyEnd("Input ends inside an expression-field in a literal.");
-
-            case '(':
-            case '[':
-            case '{':
-                parens.push_back(peek());
-                ret += next();
-                break;
-
             case ')':
-                if (parens.empty() || parens.back() != '(')
-                    throw ParsingError(m_lineNo, "Mismatched ) in expression-field");
+                throw ParsingError(m_lineNo, "Extraneous ) in expression-field");
 
-                parens.pop_back();
-                ret += next();
-                break;
-                    
             case ']':
-                if (parens.empty() || parens.back() != '[')
-                    throw ParsingError(m_lineNo, "Mismatched [ in expression-field");
-
-                parens.pop_back();
-                ret += next();
+                throw ParsingError(m_lineNo, "Extraneous ] in expression-field");
                 break;
 
             case '}':
-                if (parens.empty()) {
-                    if (ternaries > 0)
-                        throw ParsingError(m_lineNo, "Found } in expression-field when there were ? operators without matching :");
-                        
-                    return ret;
-                }
-
-                if (parens.back() != '{')
-                    throw ParsingError(m_lineNo, "Mismatched } in expression-field");
-
-                parens.pop_back();
-                ret += next();
-                break;
+                return ret;
 
             case '?':
-                if (parens.empty())
-                    ternaries++;
-
                 ret += next();
-                break;
+                ret += processExpressionField();
+                if (peek() != ':')
+                    throw ParsingError(m_lineNo, "Mismatched ? in expression-field");
+
+                ret += next();      // Pass :
+                ret += processExpressionField();
+                return ret;
 
             case ':':
-                if (peek(1) == ':')
-                    ret += next(); // Double colon is always a scoping operator
-                else {
-                    if (parens.empty()) {
-                        if (ternaries == 0)
-                            return ret;
-
-                        ternaries--;
-                    }
-                }
-                
+                if (peek(1) != ':')
+                    return ret;
+                ret += next();
                 ret += next();
                 break;
-
-            case '"':
-                processStringLiteral(ret);
-                break;
-
-            case '\'':
-                ret += processCharLiteral();
-                break;
-
-            case '/':               // Check for comments.
-                if (peek(1) == '*') {
-                    ret += processCComment();  //  C comments don't need \ last on lines even if this expression is inside a non-raw literal.
-                    break;
-                }
-                else if (peek(1) == '/') {
-                    ret += processCPPComment();  //  C++ comments support \ last on lines regardless of if the enclosing literal is raw or not.
-                    if (peek() == '\0')
-                        throw EarlyEnd("Input ends with a // comment inside a expression-field");
-
-                    break;
-                }
-
-                [[fallthrough]];  // Not a comment
-
+                
             default:
                 ret += next();
                 break;      // Nothing to do for other characters.
@@ -412,14 +363,76 @@ private:
         return ret;
     }
 
+    // Pass over any number of nested comments, literals and matched parentheses, returning the text passed over, which may span lines.
+    // Note: This helper must work on an existing 'ret' as processStringLiteral does so to be able to check for prefixes in the
+    // already passed text. Fortunately prefixes are not allowed to span lines.
+    void processNested(std::string& str)
+    {
+        while (true) {
+            switch (peek()) {
+            case '\0':
+                throw EarlyEnd("Input ends inside an expression-field in a literal.");
+
+            case '(':
+            case '[':
+            case '{':
+                str += processNestedParenthesis();
+                break;
+
+            case '"':
+                processStringLiteral(str);
+                break;
+
+            case '\'':
+                str += processCharLiteral();
+                break;
+
+            case '/':               // Check for comments.
+                if (peek(1) == '*') {
+                    str += processCComment();  //  C comments don't need \ last on lines even if this expression is inside a non-raw literal.
+                    break;
+                }
+                else if (peek(1) == '/') {
+                    str += processCPPComment();  //  C++ comments support \ last on lines regardless of if the enclosing literal is raw or not.
+                    if (peek() == '\0')
+                        throw EarlyEnd("Input ends with a // comment inside a expression-field");
+                }
+                break;
+
+            default:
+                return;
+            }
+        }
+    }
+
+    std::string processNestedParenthesis() {
+        static const std::string introducers = "([{";
+        static const std::string terminators = ")]}";
+
+        size_t intIx = introducers.find(peek());
+        assert(intIx != std::string::npos);     // Must be found.
+
+        std::string ret;
+        ret += next();
+        while (true) {
+            processNested(ret);
+            char c = next();
+            ret += c;
+            if (c == terminators[intIx])
+                return ret;
+            if (terminators.find(c) != std::string::npos)
+                throw ParsingError(m_lineNo, std::format("Mismatched {}. A {} was found where a {} was expected.", introducers[intIx], c, terminators[intIx]));
+        }
+    }
+
     std::string m_fname;            // Name of function to wrap f-literals in.
 
-    std::istream& m_inFile;
-    std::string m_inLine; 
-    const char* m_ptr;
-    int m_lineNo = 0;
+    std::istream& m_inFile;         // Input stream
+    std::string m_inLine;           // Current line in input stream
+    int m_lineNo = 0;               // Line number (starts on 1)
+    const char* m_ptr;              // Pointer to current character.
 
-    std::ostream& m_outFile;
+    std::ostream& m_outFile;        // Output stream.
 };
 
 
@@ -532,6 +545,15 @@ x')in", },                             // Test continuation line inside char lit
     // Test expressions ending in } followed by } of the expression-field.
     { R"in(f"Construction {MyClass{1, 2}}")in",                            R"out(std::format("Construction {}", MyClass{1, 2}))out" },
     
+    // Test nested parentheses in expression fields
+    { R"in(f"Construction {a * (b + c)}")in",                              R"out(std::format("Construction {}", a * (b + c)))out" },
+    { R"in(f"Construction {a * (b + p[3])}")in",                           R"out(std::format("Construction {}", a * (b + p[3])))out" },
+
+    // Negative tests with mismathced parentheses
+    { R"in(f"Construction {a * (b + c}")in", nullptr, false },
+    { R"in(f"Construction {a * (b + c]}")in", nullptr, false },
+    { R"in(f"Construction {a * [b + c}}")in", nullptr, false },
+
     // Test C comments in expression-field
     { R"in(f"The number is: {3 /* comment */ * 5}")in",                    R"out(std::format("The number is: {}", 3 /* comment */ * 5))out" },
     { R"in(f"The number is: {3 /* : ignored */ * 5:fmt}")in",              R"out(std::format("The number is: {:fmt}", 3 /* : ignored */ * 5))out" },
@@ -589,6 +611,7 @@ fum
     { R"in(f"The number is: {3 // comment \
  * 5}")in",  nullptr, false },                                             // Input ends with C++ comment continuing on next line, * 5} and " not seen as they are part of the comment
 
+    // Test nested literals
     { R"in(f"The number is: {std::strchr("He{ } j", '"')}")in",            R"out(std::format("The number is: {}", std::strchr("He{ } j", '"')))out" },
     { R"in(f"The number is: {std::strchr(R"(Hej)", '\'')}")in",            R"out(std::format("The number is: {}", std::strchr(R"(Hej)", '\'')))out" },
     { R"in(f"The number is: {std::strchr(R"xy(Hej
