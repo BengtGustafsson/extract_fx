@@ -29,3 +29,8 @@ endmacro()
 add_executable(format_literal_test format_literal.h)
 target_include_directories(format_literal_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_fx_file(format_literal_test format_literal_test.cpp)
+
+
+enable_testing()
+
+add_test(NAME test_fx COMMAND extract_fx --test)
