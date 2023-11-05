@@ -77,9 +77,8 @@ Here is a grammar for the string-literal [grammar](grammar.md)
 This implementation has some limitations as it is a pre-preprocessor which does not do any other preprocessor tasks:
 
 1. As #include files are not actually included expression-fields in f/x literals in included files are not extracted.
-3. When a f/x literal is written adjacent to another literal (f/x or not) the expression-fields are _not_ moved to the end of the sequence of literals. This
-    could be fixed.
-4. Any errors immediately stop the processing with an error message. No resynchronization/restart is attempted. Most errors are
+2. When a f/x literal is written adjacent to another literal (f/x or not) the expression-fields are _not_ moved to the end of the sequence of literals.
+4. Any errors immediately stop the pre-processing with an error message. No resynchronization/restart is attempted. Most errors are
     related to premature ending of the input anyway.
 
 
@@ -88,16 +87,15 @@ This implementation has some limitations as it is a pre-preprocessor which does 
 Just compile the extract_fx.cpp file using a C++20 compiler. Older C++ versions may also work. Optionally use the supplied
 CMakeLists.txt file to build it.
 
-The CMakeLists file contains a macro `target_extract_file` which can be called with a cmake target name and a file name without
-extension. This `filename`.cpi is supposed to be the source code before pre-preprocessing and a corresponding .cpp file is added to the
-target and a pre-preprocessing step is added to the generated build files.
+Building code with f- and x-literals
+
+The CMakeLists file contains a macro `target_fx_file` which can be called with a CMake target name and a source file. This causes the file to be set up for preprocessing with extract_fx and the resulting output file (which is in the `extracted` subdirectory of the current build directory) to be added to the project in a special *source group* called Extracted. this provides a nearly invisible integration and allows using f and x literals in source files which are added to their projects using the `target_fx_file` macro.
 
 ## Experimentation environment.
 
 A file `format_literal.h` is supplied which contains a subclass of std::string called `extracted_string`. Overloads of `print` and
-`println` are provided which take just this std::string subclass. With this the supplied demo program `format_literal_test.cpi` can
-be compiled. It contains the following uses of f-literals. Note however that std::println is not part of the overload set here as I
-didn't put the new `println` overload in namespace std.
+`println` are provided which take just this std::string subclass. With this the supplied demo program `format_literal_test.cpp` can
+be compiled. It contains the following uses of f-literals. std::println is brought into of the overload set by a using declaration here to show how the new `println` overload interacts with the overloads already in std.
 
 ```C++
 #include "format_literal.h"
@@ -116,12 +114,12 @@ the first parameter today an overload taking just an `extracted_string` can be i
 functions such as `std::print` and `std::println`. `std::format` should not have such an overload though, as calling std::format on a
 f-literal is surely a mistake.
 
-## Usage
+## extract_fx pre-preprocessor usage
 
 Without command line arguments extract_fx works like a Unix filter reading from stdin and writing to stdout. Note that with long f/x
 literals and/or expression-fields output will be withheld until enough input lines have been seen. This also happens for multiline comments.
 
-An option **--name** is available for experimentation. It controls the name of the function that f-literals are wrapped in. It defaults to `std::format`. The CMakeLists macro `target_extract_file` adds a custom build step which has a **--name** parameter set to `extracted_string`.
+An option **--name** is available for experimentation. It controls the name of the function that f-literals are wrapped in. It defaults to `std::format`. The CMakeLists macro `target_extract_file` adds a custom build step which has a **--name** parameter set to `extracted_string`.
 
 An option **--test** causes the built in unit tests to run. This can't be combined with any other parameters.
 
