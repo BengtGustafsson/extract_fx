@@ -147,7 +147,7 @@ private:
     }
 
     // Move char literal starting at s to out without touching any of its contents.
-    std::string processCharLiteral() { return processLiteral(false, 0, '\''); }
+    std::string processCharLiteral() { return processLiteral(false, '\0', "", '\''); }
 
     // Process a string literal including its prefix.
     void processStringLiteral(std::string& str) {
@@ -159,20 +159,40 @@ private:
         }
 
         char fx = 0;
+        std::string encoding;
         if (pos > 0) {
             char c = std::tolower(static_cast<unsigned char>(str[pos - 1]));
             if (c == 'f' || c == 'x') {
                 fx = c;
                 pos--;
             }
+
+            // For f literals) we must be able to move the encoding prefix inside the std::format(
+            // call.
+            if (fx == 'f' && pos > 0) {
+                switch (str[pos - 1]) {
+                case 'L':
+                case 'U':
+                case 'u':
+                    encoding += str[pos - 1];
+                    pos--;
+                    break;
+
+                case '8':
+                    if (pos > 1 && str[pos - 2] == 'u') {
+                        encoding ="u8";
+                        pos -= 2;
+                    }
+                };
+            }
         }
 
         str.erase(pos);
-        str += processLiteral(raw, fx, '"');
+        str += processLiteral(raw, fx, encoding, '"');
     }
 
-    // Process a char or string literal according to raw mode, f/x mode and terminator.
-    std::string processLiteral(bool raw, char fx, char terminator) {
+    // Process a char or string literal according to raw mode, f/x mode and terminator, prepending encoding where appropriate.
+    std::string processLiteral(bool raw, char fx, const std::string& encoding, char terminator) {
         std::string ret;
         std::string prefix;
 
@@ -180,7 +200,7 @@ private:
 
         // Output the std::format( for f literals only
         if (fx == 'f')
-            ret = m_fname + "(";
+            ret = m_fname + "(" + encoding;
 
         // Handle start of literal
         if (raw) {
@@ -242,7 +262,7 @@ private:
                     backslash = false;
             }
             
-            if (fx != 0) {
+            if (fx != '\0') {
                 if (peek() == '{') {
                     next();
                     if (peek() != '{')
@@ -633,6 +653,15 @@ ve: {})xy", 5)))out" },
     { R"in(f"{foo =}")in",                                                 R"out(std::format("foo ={}", foo ))out" },
     { R"in(f"{foo= }")in",                                                 R"out(std::format("foo= {}", foo))out" },
     { R"in(f"{foo = }")in",                                                R"out(std::format("foo = {}", foo ))out" },
+
+    // Test encoding prefix handling for f-strings (only).
+    { R"in(Lf"The number is: {3 * 5}")in",                                  R"out(std::format(L"The number is: {}", 3 * 5))out" },
+    { R"in(Uf"The number is: {3 * 5}")in",                                  R"out(std::format(U"The number is: {}", 3 * 5))out" },
+    { R"in(uf"The number is: {3 * 5}")in",                                  R"out(std::format(u"The number is: {}", 3 * 5))out" },
+    { R"in(u8f"The number is: {3 * 5}")in",                                 R"out(std::format(u8"The number is: {}", 3 * 5))out" },
+    { R"in(Wf"The number is: {3 * 5}")in",                                  R"out(Wstd::format("The number is: {}", 3 * 5))out" },
+    { R"in(u9f"The number is: {3 * 5}")in",                                 R"out(u9std::format("The number is: {}", 3 * 5))out" },
+    { R"in(LfR"xy(The number is: {3 * 5})xy")in",                           R"out(std::format(LR"xy(The number is: {})xy", 3 * 5))out" },
 
     // Longer example from readme
     { R"in(std::cout << f"The number of large values is: {
