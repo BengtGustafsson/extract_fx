@@ -20,7 +20,7 @@ public:
         ParsingError(int lineno, std::string_view msg) : std::runtime_error(std::format("Line {}: {}", lineno, msg)) {}
     };
 
-    FxExtractor(std::ostream& outFile, std::istream& inFile, const std::string& fname) : m_outFile(outFile), m_inFile(inFile), m_fname(fname) {}
+    FxExtractor(std::ostream& outFile, std::istream& inFile, const std::filesystem::path& sourceFile, const std::string& functionName, bool lineDirectives) : m_outFile(outFile), m_inFile(inFile), m_sourceFile(sourceFile), m_functionName(functionName), m_lineDirectives(lineDirectives) {}
 
     bool process() {
         try {
@@ -41,46 +41,78 @@ public:
         if (!m_inFile)
             throw std::runtime_error("Could not open file.");
         
-        nextLine();
+        getNextLine();
+        m_outFile << makeLineDirective(1, 0);
+
+        bool saved = m_lineDirectives;      // Save m_lineDirectives to be able to restore it at end of line.
 
         while (peek() != '\0') {        // Process all lines
             // Scan for string literals, skipping comments. For now don't skip #ifdef'ed out lines
+            bool continuation = false;      // No non-whitespace character since last backslash (i.e. potential continuation line)
+            bool first = true;              // No non-whitespace character since line start (i.e. potential preprocessor directive)
             while (peek() != '\n' && peek() != '\0') {
                 switch (peek()) {
                 case '"':
-                    processStringLiteral(outLine);
+                    processStringLiteral();
                     break;
 
                 case '\'':
-                    outLine += processCharLiteral();
+                    processCharLiteral();
                     break;
 
                 case '/':               // Check for comments.
                     if (peek(1) == '*') {
-                        outLine += processCComment();  //  C comments don't need \ last on lines even if this expression is inside a non-raw literal.
+                        processCComment();  //  C comments don't need \ last on lines even if this expression is inside a non-raw literal.
                         break;
                     }
                     else if (peek(1) == '/') {
-                        outLine += processCPPComment();  //  C++ comments support \ last on lines regardless of if the enclosing literal is raw or not.
+                        processCPPComment();  //  C++ comments support \ last on lines regardless of if the enclosing literal is raw or not.
                         break;
                     }
                     [[fallthrough]];    // No comment start
 
+                case '\\':
+                    continuation = true;
+                    xfer();
+                    break;
+
+                case '#':
+                    if (first)
+                        m_lineDirectives = false;       // This is a preprocessor directive. We can't do #line in them even if enabled.
+
+                    xfer();
+                    break;
+                    
                 default:
-                    outLine += next();
+                    if (!isspace()) {
+                        first = false; 
+                        continuation = false;
+                    }
+                    
+                    xfer();
                 }
             }
 
-            m_outFile << outLine;
+            m_outFile << m_outLines;
             if (!m_inFile.eof())            // Preserve lack of last \n char in input.
                 m_outFile << next();
 
-            outLine.clear();
+            m_outLines.clear();
+            if (!continuation)              // Don't restore if the preprocessor directive continues
+                m_lineDirectives = saved;
         }
     }
 
 private:
-    bool nextLine() {
+    // Descriptor of each expression field including where it starts to be able to add #line directive
+    // ensuring that C++ error messages are appointed to the right position.
+    struct Field {
+        int line;
+        int col;
+        std::string expression;
+    };
+
+    bool getNextLine() {
         getline(m_inFile, m_inLine);
         m_lineNo++;
         if (!m_inFile.eof())
@@ -95,20 +127,31 @@ private:
 
     char next() {
         if (*m_ptr == '\n' || *m_ptr == '\0') {
-            nextLine();
+            getNextLine();
             return '\n';
         }
 
         return *m_ptr++;
     }
 
-    void bump(size_t n) { m_ptr += n; }
+    void xfer() {
+        char c = next();
+        m_outLines += c;
+    }
+
     bool isspace() { return std::isspace(static_cast<unsigned char>(peek())); }
 
-    std::string processCPPComment() {
+    std::string makeLineDirective(int line, int col) {
+        if (!m_lineDirectives)
+            return {};
+        
+        return std::format("\n#line {} \"{}\"\n{}", line, m_sourceFile.string(), std::string(col, ' '));
+    }
+
+    void processCPPComment() {
         assert(peek() == '/' && peek(1) == '/');
-        std::string ret = "//";
-        bump(2);
+        xfer();
+        xfer();
 
         bool backslash = false;     // Set when the last non-whitespace character is a backslash.
         while (peek() != '\n' || backslash) {            // Comment can have continuation lines...
@@ -116,44 +159,41 @@ private:
                 if (backslash)
                     throw EarlyEnd("Input ends with a // comment line ending in \\.");
                 else
-                    return ret;     // Comment line last in file. This is ok.
+                    return;     // Comment line last in file. This is ok.
             }
             else if (peek() == '\\')
                 backslash = true;
             else if (peek() == '\n' || !isspace())
                 backslash = false;
 
-            ret += next();
+            xfer();
         }
-
-        return ret;
     }
 
-    std::string processCComment() {
+    void processCComment() {
         assert(peek() == '/' && peek(1) == '*');
-        std::string ret = "/*";;
-        bump(2);
+        xfer();
+        xfer();
         
         while (peek() != '*' || peek(1) != '/') {
             if (peek() == '\0')
                 throw EarlyEnd("/* unmatched to the end of the input.");
 
-            ret += next();
+            xfer();
         }
 
-        ret += "*/";
-        bump(2);
-        return ret;
+        xfer();
+        xfer();
     }
 
     // Move char literal starting at s to out without touching any of its contents.
-    std::string processCharLiteral() { return processLiteral(false, '\0', "", '\''); }
+    void processCharLiteral() { processLiteral(false, '\0', "", '\''); }
 
     // Process a string literal including its prefix.
-    void processStringLiteral(std::string& str) {
+    void processStringLiteral() {
         bool raw = false;
-        size_t pos = str.size();
-        if (pos > 0 && str[pos - 1] == 'R') {
+        size_t pos = m_outLines.size();
+        if (pos > 0 && m_outLines[pos - 1] == 'R') {
             raw = true;
             pos--;
         }
@@ -161,7 +201,7 @@ private:
         char fx = 0;
         std::string encoding;
         if (pos > 0) {
-            char c = std::tolower(static_cast<unsigned char>(str[pos - 1]));
+            char c = std::tolower(static_cast<unsigned char>(m_outLines[pos - 1]));
             if (c == 'f' || c == 'x') {
                 fx = c;
                 pos--;
@@ -170,16 +210,16 @@ private:
             // For f literals) we must be able to move the encoding prefix inside the std::format(
             // call.
             if (fx == 'f' && pos > 0) {
-                switch (str[pos - 1]) {
+                switch (m_outLines[pos - 1]) {
                 case 'L':
                 case 'U':
                 case 'u':
-                    encoding += str[pos - 1];
+                    encoding += m_outLines[pos - 1];
                     pos--;
                     break;
 
                 case '8':
-                    if (pos > 1 && str[pos - 2] == 'u') {
+                    if (pos > 1 && m_outLines[pos - 2] == 'u') {
                         encoding ="u8";
                         pos -= 2;
                     }
@@ -187,25 +227,24 @@ private:
             }
         }
 
-        str.erase(pos);
-        str += processLiteral(raw, fx, encoding, '"');
+        m_outLines.erase(pos);
+        processLiteral(raw, fx, encoding, '"');
     }
 
     // Process a char or string literal according to raw mode, f/x mode and terminator, prepending encoding where appropriate.
-    std::string processLiteral(bool raw, char fx, const std::string& encoding, char terminator) {
-        std::string ret;
+    void processLiteral(bool raw, char fx, const std::string& encoding, char terminator) {
         std::string prefix;
 
         assert(peek() == terminator);
 
         // Output the std::format( for f literals only
         if (fx == 'f')
-            ret = m_fname + "(" + encoding;
+            m_outLines += m_functionName + "(" + encoding;
 
         // Handle start of literal
         if (raw) {
-            ret += 'R';
-            ret += next();
+            m_outLines += 'R';
+            xfer();
             
             // Collect prefix
             while (peek() != '(') {
@@ -214,14 +253,14 @@ private:
 
                 prefix += next();
             }
-            ret += prefix;
-            ret += next();         // add (
+            m_outLines += prefix;
+            xfer();
         }
         else
-            ret += next();          // add quote
+            xfer();         // add quote
 
         // Process the actual literal contents.
-        std::vector<std::string> fields;       // Can't be string_views as R literals span lines and we only store the last line.
+        std::vector<Field> fields;       // Can't be string_views as R literals span lines and we only store the last line.
         bool backslash = false;         // Only used in non-raw case
         while (true) {
             if (raw) {      // Pass raw line ends and try to find prefix
@@ -238,9 +277,9 @@ private:
                     }
                     if (pix == prefix.size() && peek(pix + 1) == terminator) {
                         // Raw literal ended
-                        ret += next();  // The )
-                        ret += prefix;
-                        bump(prefix.size());
+                        xfer();  // The )
+                        m_outLines += prefix;
+                        m_ptr += prefix.size();
                         break;
                     }
                 }
@@ -266,85 +305,96 @@ private:
                 if (peek() == '{') {
                     next();
                     if (peek() != '{')
-                        ret += processExtractionField(fields);
+                        processExtractionField(fields);
                     else
-                        ret += '{';   // The first { transferred for double left braces. The second is transferred as the "normal" literal character.
+                        m_outLines += '{';   // The first { transferred for double left braces. The second is transferred as the "normal" literal character.
                 }
                 else if (peek() == '}') {
-                    ret += next();      // Transfer the first } to the resulting string
+                    xfer();      // Transfer the first } to the resulting string
                     if (peek() != '}')
                         throw ParsingError(m_lineNo, "Right brace characters must be doubled in f/x string literals.");
                 }
             }
 
-            ret += next();      // A regular literal character
+            xfer();      // A regular literal character
         }
 
-        ret += next();      // Transfer the ending quote
+        xfer();      // Transfer the ending quote
 
         // Emit all extracted field expressions.
-        for (auto& field : fields)
-            ret += ", " + field;
+        for (auto& field : fields) {
+            m_outLines += makeLineDirective(field.line, field.col - 2);   // Subtract 2 for the , we add before the field below.
+            m_outLines += ", " + field.expression;
+        }
 
         if (fx == 'f')
-            ret += ")";
-
-        return ret;
+            m_outLines += ")";
     }
 
     // Parse an extraction field and add its contained expression(s) to fields. Return the remaining literal part such as {} or {:xxx}
-    std::string processExtractionField(std::vector<std::string>& fields) {
-        std::string ret;
-
-        std::string field = processExpressionField();
+    void processExtractionField(std::vector<Field>& fields) {
+        Field field = processExpressionField();
         // Check for expression-field ending in = +optional spaces.
-        size_t pos = field.size();
-        while (pos > 0 && std::isspace(static_cast<unsigned char>(field[pos - 1])))
+        size_t pos = field.expression.size();
+        while (pos > 0 && std::isspace(static_cast<unsigned char>(field.expression[pos - 1])))
             pos--;
 
-        if (field[pos - 1] == '=') {  // Debug style field where expression ends in =
-            ret += field;
-            field.erase(pos - 1);   // Remove = and trailing spaces from field.
+        if (field.expression[pos - 1] == '=') {  // Debug style field where expression ends in =
+            m_outLines += field.expression;
+            field.expression.erase(pos - 1);   // Remove = and trailing spaces from field.
         }
 
-        ret += '{';     // After automatically generated label, if any.
+        m_outLines += '{';     // After automatically generated label, if any.
 
         fields.push_back(std::move(field));
         // If : check for nested fields in the format-spec
         if (peek() == ':') {
-            ret += next();      // Transfer the : to the resulting string
+            xfer();      // Transfer the : to the resulting string
             while (peek() != '}') {
                 if (peek() == '\0')
                     EarlyEnd("Input ends inside format-spec");
 
                 if (peek() == '{') {    // Nested field starts
-                    ret += next();
+                    xfer();
 
                     // Find the end of the expression-field. Basically scan for : or } but ignore as many colons as there are ? and
                     // skip through all parentheses, except in string literals.
-                    std::string field = processExpressionField();
-
-                    fields.push_back(std::move(field));
+                    Field field = processExpressionField();
                     if (peek() != '}')   // Colon not allowed inside nested expression-field.
                         throw ParsingError(m_lineNo, "Found nested expression-field ending in :. This is not allowed.");
+
+                    fields.push_back(std::move(field));
                 }
 
-                ret += next();      // Transfer other formatting argument char to the resulting string
+                xfer();      // Transfer other formatting argument char to the resulting string
             }
         }
-
-        return ret;
     }
     
     // Parse a top level part of an expression field until a colon or right brace is encountered. Ignore double colons, recurse on
     // ?, (, [, {.
     // Pre: just after {
     // Post: peek() == '}' or ':'
-    std::string processExpressionField() {
-        std::string ret;            // Field string to return
+    Field processExpressionField() {
+        Field ret;            // Field string to return
+        ret.line = m_lineNo;
+        ret.col = int(m_ptr - m_inLine.c_str());
 
+        std::string save = std::move(m_outLines);
+        m_outLines.clear();
+
+        // Another level required to handle ?: ternaries without redoing the save operation.
+        processExpression();
+
+        ret.expression = std::move(m_outLines);
+        m_outLines = std::move(save);
+        return ret;
+    }
+
+    void processExpression()
+    {
         while (true) {
-            processNested(ret);
+            processNested();
 
             switch (peek()) {
             case ')':
@@ -354,39 +404,38 @@ private:
                 throw ParsingError(m_lineNo, "Extraneous ] in expression-field");
                 break;
 
-            case '}':
-                return ret;
-
             case '?':
-                ret += next();
-                ret += processExpressionField();
+                xfer();           // TODO: Use m_outLines anyway: We must keep a stack of ongoing outlines by saving it in parseLiteral or somewhere on the way. This is as parseLiteral is called recursively.
+                processExpression();
                 if (peek() != ':')
                     throw ParsingError(m_lineNo, "Mismatched ? in expression-field");
 
-                ret += next();      // Pass :
-                ret += processExpressionField();
-                return ret;
+                xfer();      // Pass :
+                processExpression();
+                return;
 
+            case '}':
+                return;
+                
             case ':':
                 if (peek(1) != ':')
-                    return ret;
-                ret += next();
-                ret += next();
+                    return;
+
+                xfer();
+                xfer();
                 break;
                 
             default:
-                ret += next();
+                xfer();
                 break;      // Nothing to do for other characters.
             }
         }
-
-        return ret;
     }
 
     // Pass over any number of nested comments, literals and matched parentheses, returning the text passed over, which may span lines.
     // Note: This helper must work on an existing 'ret' as processStringLiteral does so to be able to check for prefixes in the
     // already passed text. Fortunately prefixes are not allowed to span lines.
-    void processNested(std::string& str)
+    void processNested()
     {
         while (true) {
             switch (peek()) {
@@ -396,24 +445,24 @@ private:
             case '(':
             case '[':
             case '{':
-                str += processNestedParenthesis();
+                processNestedParenthesis();
                 break;
 
             case '"':
-                processStringLiteral(str);
+                processStringLiteral();
                 break;
 
             case '\'':
-                str += processCharLiteral();
+                processCharLiteral();
                 break;
 
             case '/':               // Check for comments.
                 if (peek(1) == '*') {
-                    str += processCComment();  //  C comments don't need \ last on lines even if this expression is inside a non-raw literal.
+                    processCComment();  //  C comments don't need \ last on lines even if this expression is inside a non-raw literal.
                     break;
                 }
                 else if (peek(1) == '/') {
-                    str += processCPPComment();  //  C++ comments support \ last on lines regardless of if the enclosing literal is raw or not.
+                    processCPPComment();  //  C++ comments support \ last on lines regardless of if the enclosing literal is raw or not.
                     if (peek() == '\0')
                         throw EarlyEnd("Input ends with a // comment inside a expression-field");
                 }
@@ -425,27 +474,28 @@ private:
         }
     }
 
-    std::string processNestedParenthesis() {
+    void processNestedParenthesis() {
         static const std::string introducers = "([{";
         static const std::string terminators = ")]}";
 
         size_t intIx = introducers.find(peek());
         assert(intIx != std::string::npos);     // Must be found.
 
-        std::string ret;
-        ret += next();
+        xfer();
         while (true) {
-            processNested(ret);
-            char c = next();
-            ret += c;
+            processNested();
+            char c = peek();
+            xfer();
             if (c == terminators[intIx])
-                return ret;
+                return;
             if (terminators.find(c) != std::string::npos)
                 throw ParsingError(m_lineNo, std::format("Mismatched {}. A {} was found where a {} was expected.", introducers[intIx], c, terminators[intIx]));
         }
     }
 
-    std::string m_fname;            // Name of function to wrap f-literals in.
+    std::filesystem::path m_sourceFile;    // Path to file being compiled
+    std::string m_functionName;            // Name of function to wrap f-literals in.
+    bool m_lineDirectives;                 // True to output line directives. Set false in most unit tests.
 
     std::istream& m_inFile;         // Input stream
     std::string m_inLine;           // Current line in input stream
@@ -453,13 +503,15 @@ private:
     const char* m_ptr;              // Pointer to current character.
 
     std::ostream& m_outFile;        // Output stream.
+    std::string m_outLines;         // Current output lines. Except inside multi-line literals or comments this is always just one line
 };
 
 
-struct {
-    const char* in;
+struct TestSpec {
+    const char* input;
     const char* truth = nullptr;
     bool expectOk = true;
+    bool lineDirectives = false;
 } tests[] = {
     // Test basic functionality
     { R"in()in" },
@@ -673,28 +725,36 @@ ve: {})xy", 5)))out" },
          return elem.value > largeVal;  // The value member is compared.
     })
 , largeVal);)out" },
+
+    // Test line directive. 15 chars before the { so 16 spaces first on line following the line directive.
+    { R"in(Lf"The number is: {3 * 5}")in",                                  R"out(
+#line 1 "test"
+std::format(L"The number is: {}"
+#line 1 "test"
+                 , 3 * 5))out", true, true },
 };
 
 
-bool runOneTest(const char* input, const char* truth, bool expectOk, int ix)
+bool runOneTest(const TestSpec& test, int ix)
 {
-    std::istringstream in(input);
+    std::istringstream in(test.input);
     std::ostringstream out;
-    FxExtractor extractor(out, in, "std::format");
+    FxExtractor extractor(out, in, "test", "std::format", test.lineDirectives);
 
-    if (expectOk) {
+    if (test.expectOk) {
         if (!extractor.process()) {
-            std::cerr << std::format("ERROR in test {}: The error string above was unexpected when processing input:\n{}\n", ix, input);
+            std::cerr << std::format("ERROR in test {}: The error string above was unexpected when processing input:\n{}\n", ix, test.input);
             return false;
         }
+        std::string truth = test.truth != nullptr ? test.truth : test.input;
         if (out.str() != truth) {
-            std::cerr << std::format("ERROR in test {}: Extraction produced erroneous output:\n{}\nWhen expected output is:\n{}\n", ix, out.str(), truth);
+            std::cerr << std::format("ERROR in test {}: Extraction produced erroneous output:\n{}\nWhen expected output is:\n{}\nFor input:\n{}\n", ix, out.str(), truth, test.input);
             return false;
         }
     }
     else {
         if (extractor.process()) {
-            std::cerr << std::format("ERROR in test {}: The input below should have produced an error string.\n{}\nExtraction however produced output:\n{}\n", ix, input, out.str());
+            std::cerr << std::format("ERROR in test {}: The input below should have produced an error string.\n{}\nExtraction however produced output:\n{}\n", ix, test.input, out.str());
             return false;
         }
     }
@@ -708,7 +768,7 @@ int test()
     int ret = 0;
     int total = 0;
     for (auto& test : tests) {
-        if (!runOneTest(test.in, test.truth != nullptr ? test.truth : test.in, test.expectOk, total))
+        if (!runOneTest(test, total))
             ret++;
         total++;
     }
@@ -732,27 +792,30 @@ int main(int argc, char** argv)
     std::istream* is = &std::cin;
     std::ostream* os = &std::cout;
 
-    std::string name = "std::format";
+    std::string functionName = "std::format";
+
+    std::filesystem::path inputPath  = "<stdin>";
 
     if (argc > 1) {
         int argn = 1;
         if (std::strncmp(argv[1], "--name", 6) == 0) {
             argn++;
             if (argv[1][6] == '=' || argv[1][6] == ':') {
-                name = argv[1] + 7;
+                functionName = argv[1] + 7;
             }
             else if (argc < 3) {
                 std::cout << "--name must be followed by a function name to surround f literals with. Default is std::format()\n.";
                 return 1;
             }
             else {
-                name = argv[2];
+                functionName = argv[2];
                 argn++;
             }
         }
 
         if (argc > argn) {
-            static std::ifstream inFile(argv[argn++]);
+            inputPath = argv[argn++];
+            static std::ifstream inFile(inputPath);
             if (!inFile) {
                 std::cerr << "Could not open input file " << argv[1];
                 return 1;
@@ -770,7 +833,7 @@ int main(int argc, char** argv)
         }
     }
 
-    FxExtractor extractor(*os, *is, name);
+    FxExtractor extractor(*os, *is, inputPath, functionName, true);
     return extractor.process() ? 0 : 1;
 }
 
