@@ -48,7 +48,7 @@ std::cout << f"The number of large values is: {
 
 So far the proposal is not concrete enough to be able to tell if this implementation is conformant. This implementation is a proof
 of concept for a variant of the proposal where expressions-fields can be written verbatim as if they were outside the literal, i.e.
-with non-escaped string literals and comments.
+with non-escaped string literals and with comments.
 
 A quick debug output feature available in Python f-literals is also implemented in extract_fx: If an expression ends with a =
 character (apart from whitespace) the expression is output as a label too, so to easily print values of some variables just do:
@@ -66,9 +66,8 @@ While tools that scan source code would be required to do more work to find the 
 such tools would have to the full processing of the contents of f/x literals anyway as they contain executable code, subject to for
 instance static analysis. so this is not a strong argument for requiring escaping of quotes inside expression-fields.
 
-Some tools, like this documentation generator, however has a too limited parsing capability which is obvious from the coloring
-above. This tool (Typora) does not even handle raw literals so its basically a lost cause to get it to handle embedded
-expressions-fields.
+Some tools, like the github C++ code renderer, however has a too limited parsing capability which is obvious from the coloring
+above.
 
 Here is a grammar for the string-literal [grammar](grammar.md)
 
@@ -78,18 +77,19 @@ This implementation has some limitations as it is a pre-preprocessor which does 
 
 1. As #include files are not actually included expression-fields in f/x literals in included files are not extracted.
 2. When a f/x literal is written adjacent to another literal (f/x or not) the expression-fields are _not_ moved to the end of the sequence of literals.
-4. Any errors immediately stop the pre-processing with an error message. No resynchronization/restart is attempted. Most errors are
+3. Any errors immediately stop the pre-processing with an error message. No resynchronization/restart is attempted. Most errors are
     related to premature ending of the input anyway.
+4. While #line directives are emitted to place any errors in the expression-fields in the correct position this can't be done in expression-fields in fx-literals in #defines.
 
 
 ## Building extract_fx
 
 Just compile the extract_fx.cpp file using a C++20 compiler. Older C++ versions may also work. Optionally use the supplied
-CMakeLists.txt file to build it.
+CMakeLists.txt file to build it. As the example in format_literal_test.cpp uses std::println the compiler must have this implemented, which is currently only true for the latest Visual Studio 2022 compilers.
 
 Building code with f- and x-literals
 
-The CMakeLists file contains a macro `target_fx_file` which can be called with a CMake target name and a source file. This causes the file to be set up for preprocessing with extract_fx and the resulting output file (which is in the `extracted` subdirectory of the current build directory) to be added to the project in a special *source group* called Extracted. this provides a nearly invisible integration and allows using f and x literals in source files which are added to their projects using the `target_fx_file` macro.
+The CMakeLists file contains a macro `target_fx_file` which can be called with a CMake target name and a source file. This causes the file to be set up for preprocessing with extract_fx and the resulting output file (which is in the `extracted` subdirectory of the current build directory) to be added to the project in a special *source group* called Extracted. this provides a nearly invisible integration and allows using f and x literals in source files which are added to their projects using the `target_fx_file` macro.
 
 ## Experimentation environment.
 
