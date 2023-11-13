@@ -15,5 +15,5 @@ public:
 
 // Has to be repeated for each other function we want f literals to work with, and which does not take a
 // std::string today... there should not be many.
-void print(const extracted_string& str) { std::cout << str; }
-void println(const extracted_string& str) { std::cout << str << "\n"; }     // Or maybe endl?
+inline void print(const extracted_string& str) { std::cout << str; }
+inline void println(const extracted_string& str) { std::cout << str << "\n"; }     // Or maybe endl?
