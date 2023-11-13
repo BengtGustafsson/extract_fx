@@ -7,28 +7,32 @@ add_executable(extract_fx extract_fx.cpp)
 
 
 # Macro which takes a cpi file and generates a cpp file in the selected target.
-macro(target_fx_file TARGET FILE)
-    set(IN ${CMAKE_CURRENT_SOURCE_DIR}/${FILE})
-    set(OUT ${CMAKE_CURRENT_BINARY_DIR}/extracted/${FILE})
+function(target_fx_file TARGET)
     set(EXEC ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/extract_fx)
+    
+    foreach(FILE ${ARGN})
+        set(IN ${CMAKE_CURRENT_SOURCE_DIR}/${FILE})
+        set(OUT ${CMAKE_CURRENT_BINARY_DIR}/extracted/${FILE})
+    message(STATUS ${IN})
+    message(STATUS ${OUT})
+        ################################################################
+        # Custom command to generate pre-preprocessedd .cpp file in the build directory from .cpp file in the source directory.
+        add_custom_command(OUTPUT "${OUT}"
+                           MAIN_DEPENDENCY "${IN}"
+                           DEPENDS extract_fx
+                           COMMAND "${EXEC}" --name extracted_string "${IN}" "${OUT}"
+        )
 
-    ################################################################
-    # Custom command to generate .cpp file from .cpi file
-    add_custom_command(OUTPUT "${OUT}"
-                       MAIN_DEPENDENCY "${IN}"
-                       DEPENDS extract_fx
-                       COMMAND "${EXEC}" --name extracted_string "${IN}" "${OUT}"
-    )
-
-    target_sources("${TARGET}" PRIVATE "${IN}" "${OUT}")
-    source_group(Extracted "${OUT}")
-endmacro()
+        target_sources("${TARGET}" PRIVATE "${IN}" "${OUT}")
+        source_group(Extracted FILES ${CMAKE_CURRENT_BINARY_DIR}/extracted/${FILE})
+    endforeach()
+    endfunction()
 
 
 
 add_executable(format_literal_test format_literal.h)
 target_include_directories(format_literal_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_fx_file(format_literal_test format_literal_test.cpp)
+target_fx_file(format_literal_test format_literal_test.cpp extratest.cpp)
 
 
 enable_testing()
