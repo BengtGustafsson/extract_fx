@@ -5,8 +5,7 @@ function(target_fx_file TARGET)
     foreach(FILE ${ARGN})
         set(IN ${CMAKE_CURRENT_SOURCE_DIR}/${FILE})
         set(OUT ${CMAKE_CURRENT_BINARY_DIR}/extracted/${FILE})
-    message(STATUS ${IN})
-    message(STATUS ${OUT})
+
         ################################################################
         # Custom command to generate pre-preprocessedd .cpp file in the build directory from .cpp file in the source directory.
         add_custom_command(OUTPUT "${OUT}"
