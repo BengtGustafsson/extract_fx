@@ -11,7 +11,7 @@ function(target_fx_file TARGET)
         add_custom_command(OUTPUT "${OUT}"
                            MAIN_DEPENDENCY "${IN}"
                            DEPENDS extract_fx
-                           COMMAND "${EXEC}" --name extracted_string "${IN}" "${OUT}"
+                           COMMAND "${EXEC}" --name extract_string* "${IN}" "${OUT}"
         )
 
         target_sources("${TARGET}" PRIVATE "${IN}" "${OUT}")

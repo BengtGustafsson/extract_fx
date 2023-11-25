@@ -8,10 +8,12 @@
 
 // This class just exists to avoid _any_ string from being passable to print. I don't know why this would be important, but it seems that this was the initiator of the f/x subdivision.
 class extracted_string : public std::string {
-public:
-    template<typename... Args> extracted_string(std::format_string<Args...> fmt, Args&&... args) : std::string(std::format(std::move(fmt), std::forward<Args>(args)...)) {}
 };
 
+template<size_t Count, typename... Args> auto extract_string(std::format_string<Args...> fmt, Args&&... args) {
+    static_assert(Count == sizeof...(Args), "Too many extracted expressions, did you use operator comma?");
+    return extracted_string(std::format(std::move(fmt), std::forward<Args>(args)...));
+}
 
 // Has to be repeated for each other function we want f literals to work with, and which does not take a
 // std::string today... there should not be many.

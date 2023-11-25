@@ -237,14 +237,16 @@ private:
 
         assert(peek() == terminator);
 
-        // Output the std::format( for f literals only
-        if (fx == 'f')
-            m_outLines += m_functionName + "(" + encoding;
+        std::string lit;
+
+        auto toLit = [&] {
+            lit += next();
+        };
 
         // Handle start of literal
         if (raw) {
-            m_outLines += 'R';
-            xfer();
+            lit += 'R';
+            toLit();
             
             // Collect prefix
             while (peek() != '(') {
@@ -253,11 +255,11 @@ private:
 
                 prefix += next();
             }
-            m_outLines += prefix;
-            xfer();
+            lit += prefix;
+            toLit();
         }
         else
-            xfer();         // add quote
+            toLit();         // add quote
 
         // Process the actual literal contents.
         std::vector<Field> fields;       // Can't be string_views as R literals span lines and we only store the last line.
@@ -277,8 +279,8 @@ private:
                     }
                     if (pix == prefix.size() && peek(pix + 1) == terminator) {
                         // Raw literal ended
-                        xfer();  // The )
-                        m_outLines += prefix;
+                        toLit();  // The )
+                        lit += prefix;
                         m_ptr += prefix.size();
                         break;
                     }
@@ -305,34 +307,49 @@ private:
                 if (peek() == '{') {
                     next();
                     if (peek() != '{')
-                        processExtractionField(fields);
+                        processExtractionField(lit, fields);
                     else
-                        m_outLines += '{';   // The first { transferred for double left braces. The second is transferred as the "normal" literal character.
+                        lit += '{';   // The first { transferred for double left braces. The second is transferred as the "normal" literal character.
                 }
                 else if (peek() == '}') {
-                    xfer();      // Transfer the first } to the resulting string
+                    toLit();      // Transfer the first } to the resulting string
                     if (peek() != '}')
                         throw ParsingError(m_lineNo, "Right brace characters must be doubled in f/x string literals.");
                 }
             }
 
-            xfer();      // A regular literal character
+            toLit();      // A regular literal character
         }
 
-        xfer();      // Transfer the ending quote
+        toLit();      // Transfer the ending quote
 
-        // Emit all extracted field expressions.
-        for (auto& field : fields) {
-            m_outLines += makeLineDirective(field.line, field.col - 2);   // Subtract 2 for the , we add before the field below.
-            m_outLines += ", " + field.expression;
+        if (fx != '\0') {
+            // Output the std::format( for f literals only
+            if (fx == 'f') {
+                if (m_functionName.back() == '*')
+                    m_outLines += m_functionName.substr(0, m_functionName.size() - 1) + '<' + std::to_string(fields.size()) + '>';
+                else
+                    m_outLines += m_functionName;
+
+                m_outLines += "(" + encoding;
+            }
+
+            m_outLines += lit;
+            // Emit all extracted field expressions.
+            for (auto& field : fields) {
+                m_outLines += makeLineDirective(field.line, field.col - 2);   // Subtract 2 for the , we add before the field below.
+                m_outLines += ", " + field.expression;
+            }
+
+            if (fx == 'f')
+                m_outLines += ")";
         }
-
-        if (fx == 'f')
-            m_outLines += ")";
+        else
+            m_outLines += lit;
     }
 
     // Parse an extraction field and add its contained expression(s) to fields. Return the remaining literal part such as {} or {:xxx}
-    void processExtractionField(std::vector<Field>& fields) {
+    void processExtractionField(std::string& lit, std::vector<Field>& fields) {
         Field field = processExpressionField();
         // Check for expression-field ending in = +optional spaces.
         size_t pos = field.expression.size();
@@ -340,22 +357,26 @@ private:
             pos--;
 
         if (field.expression[pos - 1] == '=') {  // Debug style field where expression ends in =
-            m_outLines += field.expression;
+            lit += field.expression;
             field.expression.erase(pos - 1);   // Remove = and trailing spaces from field.
         }
 
-        m_outLines += '{';     // After automatically generated label, if any.
+        lit += '{';     // After automatically generated label, if any.
+
+        auto toLit = [&] {
+            lit += next();
+        };
 
         fields.push_back(std::move(field));
         // If : check for nested fields in the format-spec
         if (peek() == ':') {
-            xfer();      // Transfer the : to the resulting string
+            toLit();      // Transfer the : to the resulting string
             while (peek() != '}') {
                 if (peek() == '\0')
                     EarlyEnd("Input ends inside format-spec");
 
                 if (peek() == '{') {    // Nested field starts
-                    xfer();
+                    toLit();
 
                     // Find the end of the expression-field. Basically scan for : or } but ignore as many colons as there are ? and
                     // skip through all parentheses, except in string literals.
@@ -366,7 +387,7 @@ private:
                     fields.push_back(std::move(field));
                 }
 
-                xfer();      // Transfer other formatting argument char to the resulting string
+                toLit();      // Transfer other formatting argument char to the resulting string
             }
         }
     }
@@ -419,6 +440,9 @@ private:
                 
             case ':':
                 if (peek(1) != ':')
+                    return;
+
+                if (!std::isalpha(static_cast<unsigned char>(peek(2))))
                     return;
 
                 xfer();
@@ -714,6 +738,9 @@ ve: {})xy", 5)))out" },
     { R"in(Wf"The number is: {3 * 5}")in",                                  R"out(Wstd::format("The number is: {}", 3 * 5))out" },
     { R"in(u9f"The number is: {3 * 5}")in",                                 R"out(u9std::format("The number is: {}", 3 * 5))out" },
     { R"in(LfR"xy(The number is: {3 * 5})xy")in",                           R"out(std::format(LR"xy(The number is: {})xy", 3 * 5))out" },
+
+    // Test colon fill character
+    { R"in(Lf"The number is: {3 * 5::<5}")in",                                  R"out(std::format(L"The number is: {::<5}", 3 * 5))out" },
 
     // Longer example from readme
     { R"in(std::cout << f"The number of large values is: {
