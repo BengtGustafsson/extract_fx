@@ -1,5 +1,5 @@
 # Macro which takes a cpi file and generates a cpp file in the selected target.
-function(target_fx_file TARGET)
+function(target_fx_sources TARGET)
     set(EXEC ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/extract_fx)
     
     foreach(FILE ${ARGN})

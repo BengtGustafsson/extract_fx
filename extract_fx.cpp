@@ -397,7 +397,7 @@ private:
     // Pre: just after {
     // Post: peek() == '}' or ':'
     Field processExpressionField() {
-        Field ret;            // Field string to return
+        Field ret;            // Field to return
         ret.line = m_lineNo;
         ret.col = int(m_ptr - m_inLine.c_str());
 
@@ -740,7 +740,7 @@ ve: {})xy", 5)))out" },
     { R"in(LfR"xy(The number is: {3 * 5})xy")in",                           R"out(std::format(LR"xy(The number is: {})xy", 3 * 5))out" },
 
     // Test colon fill character
-    { R"in(Lf"The number is: {3 * 5::<5}")in",                                  R"out(std::format(L"The number is: {::<5}", 3 * 5))out" },
+    { R"in(Lf"The number is: {3 * 5::<5}")in",                              R"out(std::format(L"The number is: {::<5}", 3 * 5))out" },
 
     // Longer example from readme
     { R"in(std::cout << f"The number of large values is: {
