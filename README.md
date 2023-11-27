@@ -46,16 +46,24 @@ std::cout << f"The number of large values is: {
 
 ## Implementation compared to the proposal
 
-So far the proposal is not concrete enough yet to be able to tell if this implementation is conformant. This implementation is a proof
-of concept for a variant of the proposal where expressions-fields can be written verbatim as if they were outside the literal: Without escaping quotes in nested string literals, with matched braces, comments, ternary ?: operators and :: scoping operators allowed. Expression-fields in f/x-literals can span multiple lines without ending lines by backslashes, even when enclosed in regular (non-raw) literals.
+So far the proposal is not concrete enough to be able to tell if this implementation is conformant. This implementation is a proof
+of concept for a *variant* of the proposal where expressions-fields can be written verbatim as if they were outside the literal: Without escaping quotes in nested string literals, allowing matched braces, comments, ternary ?: operators and :: scoping operators without them being confused with the end of the extraction-field or the start of the format-specifier. Expression-fields in f/x-literals can span multiple lines without ending lines in backslashes when enclosed in regular (non-raw) literals.
 
 ### Using the comma operator
 
-In the variant of f/x literals implemented in `extract_fx` it is not allowed to use operator comma on the top level of expression-fields. This is consistent with the function argument expressions that the expression-fields are extracted to. This limitation is not enforced by `extract_fx` except when the special `format_literal.h` supporting file is used, along with the fx_sources.cmake. It is not reasonable for a preprocessor to be able to find comma operators as there are also commas in template parameter lists. While these are enclosed in `< >` these could just as well be relational operators.
+In the variant of f/x literals implemented in `extract_fx` it is not allowed to use operator comma on the top level of expression-fields. This is consistent with the function argument assignment-expressions that the expression-fields are extracted to. This limitation is not enforced by `extract_fx` except when the special `format_literal.h` supporting file is used, along with the fx_sources.cmake. It is not reasonable for a preprocessor to be able to find comma operators as there are also commas in template parameter lists. While these are enclosed in `< >` these tokens could just as well be relational operators.
+
+```C++
+f"Template: {MyTemplate<1, 2>()}"			// Comma in a template argument list.
+
+f"Value: {myValue <1, 2> 1}"				// Expression with operator,
+```
+
+It does not seem feasible to require the preprocessor to be able to distinguish between these cases. While it would be possible to enclose the extracted expression-fields in parentheses this is clumsy and inconsistent with the assignment-expression limitation of function arguments.
 
 ### Format-specifiers starting with a colon
 
-To handle colon as a fill character the grammar requires each scoping operator to be followed by an identifier. This works as the fill character must be followed by an alignment represented by a <, > or ^ character. This unfortunately leaves the default range formatting case unhandled, but it seems too complicated to ask for the pre-processor to understand the difference.
+As of C++23 there are two standardized uses of a format-specifier starting with a colon, which creates a possible ambiguity with a scoping operator inside the expression-field. The case of using colon as a fill character is fairly easily handled as the grammar requires each scoping operator to be followed by an identifier. This works as the fill character must be followed by an alignment represented by a <, > or ^ character. However the case of default range formatting with a specified element format-specifier case can't be handled, as it seems too complicated to ask for the pre-processor to understand the difference.
 
 ```C++
 std::vector<double> values = { 1, 2, 3 };
@@ -66,7 +74,7 @@ f"Pi: {std::numbers::pi}";
 // Clearly a format-specifier
 f"Value0: {values[0]::<3f}"
 
-// Ambiguous, but (wrongly) interpreted as a scoping operator by this implementation and grammar:
+// Ambiguous, interpreted as a scoping operator by this implementation and grammar:
 f"values: {values::f}"
 ```
 
@@ -82,6 +90,8 @@ std::print(f"{a=}, {b = }");
 a=17, b = 42
 ```
 
+While this is somewhat neat it is uncertain if so called printf debugging should be encouraged by the standard.
+
 ### Tooling issues
 
 While tools that scan source code would be required to do more work to find the end of a f/x literal than a regular literal most
@@ -91,7 +101,7 @@ instance static analysis. so this is not a strong argument for requiring escapin
 Some simpler tools, like the Github C++ code renderer, however has a too limited parsing capability which is obvious from the coloring
 above.
 
-Here is the updated string-literal [grammar](grammar.md)
+Here is the updated string-literal [grammar](grammar.md) corresponding to this variant of the f/x literal proposal. Trying to keep this in style with the rest of the preprocessor grammar makes the length of it approach the length of the entire implementation in extract_fx.
 
 ## Limitations
 
@@ -106,12 +116,10 @@ This implementation has some limitations as it is a pre-preprocessor which does 
 
 ## Building extract_fx
 
-Just compile the extract_fx.cpp file using a C++20 compiler. Older C++ versions may also work. Optionally use the supplied
-CMakeLists.txt file to build it. 
+You can just compile the extract_fx.cpp file using a C++20 compiler. Older C++ versions may also work. Optionally use the supplied
+CMakeLists.txt file to build it. As the example in format_literal_test.cpp uses std::println the compiler must have this implemented, which is currently only true for the latest Visual Studio 2022 compilers.
 
-As the example in format_literal_test.cpp uses std::println the compiler must have this implemented, which is currently only true for the latest Visual Studio 2022 compilers.
-
-The CMakeLists file includes a file `fx_sources.cmake` which contains a function`target_fx_sources` that can be called with a CMake target name and a number source files in the same way as CMake's own `target_sources`. This causes the files to be set up for pre-preprocessing with extract_fx and the resulting output file (which is written in the `extracted` subdirectory of the current build directory) to be added to the project in a special *source group* called Extracted. This provides a nearly invisible integration into Visual Studio and allows using f and x literals in source files which are added to their projects using the `target_fx_sources` macro.
+The CMakeLists file includes a file `fx_sources.cmake` which contains a function`target_fx_sources` that can be called with a CMake target name and a number of source files in the same way as CMake's own `target_sources`. This causes the files to be set up for pre-preprocessing with extract_fx and the resulting output file (which is written in the `extracted` subdirectory of the current build directory) to be added to the project in a special *source group* called Extracted. This provides a nearly invisible integration into Visual Studio and allows using f and x literals in source files which are added to their projects using the `target_fx_sources` macro.
 
 ## Experimentation environment.
 
@@ -141,7 +149,7 @@ f-literal is surely a mistake.
 Without command line arguments `extract_fx` works like a Unix filter reading from stdin and writing to stdout. Note that with long f/x
 literals and/or expression-fields output will be withheld until enough input lines have been seen. This also happens for multiline comments.
 
-An option **--name** is available for experimentation. It controls the name of the function that f-literals are wrapped in. It defaults to `std::format`. If the function name ends in a `*` it is replaced by <N> where N is the number of extracted expressions. The CMakeLists macro `target_extract_file` adds a custom build step which has a **--name** parameter set to `extract_string*` and the extract_string function  checks that the N provided is the same as the number of arguments.
+An option **--name** is available for experimentation. It controls the name of the function that f-literals are wrapped in. It defaults to `std::format`. If the function name ends in a `*` it is replaced by `<N>` where N is the number of extracted expressions. The CMakeLists macro `target_extract_file` adds a custom build step which has a **--name** parameter set to `extract_string*` and the extract_string function  checks that the N provided is the same as the number of arguments.
 
 An option **--test** causes the built in unit tests to run. This can't be combined with any other parameters.
 
