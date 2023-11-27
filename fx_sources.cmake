@@ -1,5 +1,5 @@
 # Macro which takes a cpi file and generates a cpp file in the selected target.
-function(target_fx_file TARGET)
+function(target_fx_sources TARGET)
     set(EXEC ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/extract_fx)
     
     foreach(FILE ${ARGN})
@@ -11,7 +11,7 @@ function(target_fx_file TARGET)
         add_custom_command(OUTPUT "${OUT}"
                            MAIN_DEPENDENCY "${IN}"
                            DEPENDS extract_fx
-                           COMMAND "${EXEC}" --name extracted_string "${IN}" "${OUT}"
+                           COMMAND "${EXEC}" --name extract_string* "${IN}" "${OUT}"
         )
 
         target_sources("${TARGET}" PRIVATE "${IN}" "${OUT}")

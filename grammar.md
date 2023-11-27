@@ -83,14 +83,14 @@ simple-expression-field:
     simple-expression-field { simple-expression-field }
     simple-expression-field string-literal
     simple-expression-field char-literal
-    simple-expression-field ::
+    simple-expression-field :: identifier
 
 e-char-sequence:
     e-char
-    e-char-sequence x-char
+    e-char-sequence e-char
 
 e-char:
-    any member of the translation character set except (. [, {, ", ', ), ], }, ?, :. Comments are replaced with single spaces as outside literals.
+    any member of the translation character set except (, [, {, ", ', ), ], }, ?, :. Comments are replaced with single spaces as outside literals.
     
 format-spec:
     f-char-sequence/opt
